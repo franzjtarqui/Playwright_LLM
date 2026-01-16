@@ -128,6 +128,7 @@ export declare class PlaywrightAIAgent {
     private getPageContext;
     /**
      * Genera el prompt para el LLM - adaptado según el modo de análisis
+     * NOTA: Prompt en inglés para mejor comprensión de la IA
      */
     private generatePrompt;
     /**

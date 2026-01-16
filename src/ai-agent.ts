@@ -214,8 +214,31 @@ export class PlaywrightAIAgent {
         '[role="button"]',
         '[role="link"]',
         '[role="textbox"]',
+        '[role="menuitem"]',
+        '[role="tab"]',
+        '[role="option"]',
+        '[role="listitem"]',
         '[onclick]',
-        '[type="submit"]'
+        '[type="submit"]',
+        // Elementos de navegación y menú
+        'nav a',
+        'nav li',
+        'nav span',
+        '.sidebar a',
+        '.sidebar li', 
+        '.menu a',
+        '.menu li',
+        '[class*="nav"] a',
+        '[class*="nav"] li',
+        '[class*="menu"] a',
+        '[class*="menu"] li',
+        '[class*="sidebar"] a',
+        '[class*="sidebar"] li',
+        // Elementos clickeables comunes
+        'li[class*="item"]',
+        'div[class*="item"]',
+        'span[class*="link"]',
+        'div[class*="link"]'
       ];
       
       const results: InteractiveElement[] = [];
@@ -267,7 +290,7 @@ export class PlaywrightAIAgent {
    * Formatea los elementos interactivos como texto legible para la IA
    */
   private formatElementsForAI(elements: InteractiveElement[]): string {
-    if (elements.length === 0) return 'No se encontraron elementos interactivos.';
+    if (elements.length === 0) return 'No interactive elements found. Use visible text locators like "text \'ElementName\'" to target elements.';
     
     const formatted = elements.map((el, index) => {
       const parts = [`${index + 1}. <${el.tag}>`];
@@ -306,79 +329,86 @@ export class PlaywrightAIAgent {
 
   /**
    * Genera el prompt para el LLM - adaptado según el modo de análisis
+   * NOTA: Prompt en inglés para mejor comprensión de la IA
    */
   private generatePrompt(instruction: string, context: PageContext, elementsHtml?: string): string {
-    const basePrompt = `Eres un agente de automatización web experto. Analiza la información de esta página web y determina QUÉ ACCIONES específicas de Playwright se necesitan para cumplir esta instrucción:
+    const basePrompt = `You are an expert web automation agent. Analyze the page information and determine what Playwright actions are needed to fulfill this instruction:
 
-INSTRUCCIÓN DEL USUARIO: "${instruction}"
+USER INSTRUCTION: "${instruction}"
 
-CONTEXTO:
-- URL actual: ${context.url}
-- Título: ${context.title}`;
+CONTEXT:
+- Current URL: ${context.url}
+- Page Title: ${context.title}`;
 
     const elementsSection = elementsHtml ? `
-ELEMENTOS INTERACTIVOS DISPONIBLES EN LA PÁGINA:
+INTERACTIVE ELEMENTS AVAILABLE ON THE PAGE:
 ${elementsHtml}
 ` : '';
 
     const modeHint = this.analysisMode === 'html' 
-      ? '\nNOTA: Usa los IDs, names o placeholders de los elementos listados para identificarlos con precisión.'
-      : '\nNOTA: Describe los elementos por su apariencia visual.';
+      ? '\nNOTE: Use IDs, names, placeholders or visible text from the listed elements to identify them precisely.'
+      : '\nNOTE: Describe elements by their visual appearance.';
 
     return `${basePrompt}
 ${elementsSection}${modeHint}
 
-IMPORTANTE: Debes responder ÚNICAMENTE con un objeto JSON válido con este formato exacto:
+CRITICAL RULES:
+1. You MUST generate ALL actions mentioned in the instruction, even if elements are not visible in the list
+2. If the instruction says "click on X, then click on Y", generate BOTH click actions
+3. Menu items, sidebar links, and navigation elements may not be in the list but still exist on the page
+4. ALWAYS generate actions for every task mentioned in the instruction
+5. Use visible text as locator when element is not in the list: "text 'ElementName'"
+
+You MUST respond ONLY with a valid JSON object in this exact format:
 {
   "actions": [
     {
       "type": "fill|click|press|wait|verify",
-      "description": "Descripción legible de la acción",
-      "locator": "identificador del elemento - usa SOLO UNO: name='valor', id='valor', placeholder='valor', type='password', o texto visible 'Ingresar'",
-      "value": "valor a ingresar (solo para fill)" 
+      "description": "Human readable description of the action",
+      "locator": "element identifier - use ONLY ONE: name='value', id='value', placeholder='value', type='password', or visible text like 'Login'",
+      "value": "value to input (only for fill)" 
     }
   ],
-  "reasoning": "Tu razonamiento de por qué elegiste estas acciones",
+  "reasoning": "Your reasoning for choosing these actions",
   "needsVerification": true/false
 }
 
-TIPOS DE ACCIONES DISPONIBLES:
-- fill: Llenar un campo de texto
-- click: Hacer click en un botón o enlace
-- press: Presionar una tecla (Enter, Tab, etc)
-- wait: Esperar un tiempo específico en milisegundos
-- verify: Verificar que un texto existe en la página (usa locator con el texto a buscar)
+ACTION TYPES:
+- fill: Fill a text field
+- click: Click on a button, link, or any element (use text 'ElementText' for menu items)
+- press: Press a key (Enter, Tab, etc)
+- wait: Wait for specific time in milliseconds
+- verify: Verify that text exists on the page (use locator with text to search)
 
-REGLAS CRÍTICAS PARA LOCATORS:
-1. Para campos de email/correo: usa "name='email'" o "placeholder='correo'"
-2. Para campos de contraseña: usa "type='password'" o "name='password'" 
-3. Para botones: usa el texto visible entre comillas, ej: "texto 'Ingresar'" o "botón Ingresar"
-4. NO mezcles múltiples atributos en un locator
-5. Genera acciones SEPARADAS para cada campo
-6. Responde SOLO con JSON válido, sin markdown
+LOCATOR RULES:
+1. For email fields: use "name='email'" or "placeholder='email'"
+2. For password fields: use "type='password'" or "name='password'" 
+3. For buttons/links/menu items: use visible text like "text 'Login'" or "text 'Settings'"
+4. DO NOT mix multiple attributes in one locator
+5. Generate SEPARATE actions for each task
+6. Respond ONLY with valid JSON, no markdown
 
-EJEMPLO para login con email y contraseña:
+EXAMPLE - Multiple actions instruction:
+Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'Users'"
 {
   "actions": [
     {
-      "type": "fill",
-      "description": "Ingresar el correo electrónico",
-      "locator": "name='email'",
-      "value": "usuario@ejemplo.com"
-    },
-    {
-      "type": "fill", 
-      "description": "Ingresar la contraseña",
-      "locator": "type='password'",
-      "value": "1234"
+      "type": "verify",
+      "description": "Verify the Dashboard title is present",
+      "locator": "text 'Dashboard'"
     },
     {
       "type": "click",
-      "description": "Hacer click en el botón de ingresar",
-      "locator": "botón Ingresar"
+      "description": "Click on Settings menu",
+      "locator": "text 'Settings'"
+    },
+    {
+      "type": "click",
+      "description": "Click on Users option",
+      "locator": "text 'Users'"
     }
   ],
-  "reasoning": "Formulario de login con campos email, password y botón submit",
+  "reasoning": "Generated all 3 actions: verify title, click Settings, click Users as requested",
   "needsVerification": true
 }`;
   }

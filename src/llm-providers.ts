@@ -83,7 +83,7 @@ export class GoogleAIProvider implements LLMProvider {
   async initialize(): Promise<void> {
     const genAI = new GoogleGenerativeAI(this.apiKey);
     // Usar gemini-2.0-flash que soporta visión y texto
-    this.model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+    this.model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   }
 
   async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {

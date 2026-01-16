@@ -34,7 +34,11 @@ async function runDemo() {
             stopOnError: true, // Detener si hay error
             delayBetweenSteps: 4000, // Esperar 4 segundos entre pasos
             // 👇 MODO DE ANÁLISIS - Cambia esto para probar diferentes modos:
-            analysisMode: 'html' // 'html' | 'screenshot' | 'hybrid'
+            analysisMode: 'html', // 'html' | 'screenshot' | 'hybrid'
+            // 📊 REPORTES - Genera reportes HTML y trazas de Playwright
+            enableTracing: true, // Habilita Playwright Traces (se pueden ver en trace.playwright.dev)
+            generateReport: true, // Genera reporte HTML con screenshots
+            reportDir: './playwright-report' // Directorio para los reportes
         });
         if (result.success) {
             console.log('\n🎉 ¡Flujo completado exitosamente!');
@@ -46,6 +50,20 @@ async function runDemo() {
                 console.log(`   Paso ${s.step}: ${s.error}`);
             });
         }
+        // 📤 SLACK WEBHOOK (Ejemplo de cómo enviar a Slack)
+        // Descomenta las siguientes líneas para enviar notificación a Slack
+        const slackPayload = agent.generateSlackPayload(result, {
+            projectName: 'Demo GModelo',
+            // buildUrl: process.env.CIRCLE_BUILD_URL // URL del build en CircleCI
+        });
+        console.log('\n📤 Payload para Slack Webhook:');
+        console.log(JSON.stringify(slackPayload, null, 2));
+        // Para enviar a Slack, usa algo como:
+        // await fetch(process.env.SLACK_WEBHOOK_URL, {
+        //   method: 'POST',
+        //   headers: { 'Content-Type': 'application/json' },
+        //   body: JSON.stringify(slackPayload)
+        // });
         // Esperar para observar el resultado
         console.log('\n⏸️  Esperando 5 segundos para que puedas ver el resultado...');
         await agent.page?.waitForTimeout(5000);

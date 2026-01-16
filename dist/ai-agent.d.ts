@@ -54,6 +54,19 @@ export interface ExecuteFlowParams {
      * - 'hybrid': Ambos (más preciso, balance de tokens)
      */
     analysisMode?: AnalysisMode;
+    /**
+     * Habilitar tracing de Playwright para generar reportes
+     * Genera un archivo .zip con capturas, DOM, network, etc.
+     */
+    enableTracing?: boolean;
+    /**
+     * Generar reporte HTML al finalizar
+     */
+    generateReport?: boolean;
+    /**
+     * Directorio donde guardar los reportes (default: './test-results')
+     */
+    reportDir?: string;
 }
 /**
  * Modo de análisis de la página
@@ -87,8 +100,11 @@ export interface InteractiveElement {
 export declare class PlaywrightAIAgent {
     private llmProvider;
     private browser;
+    private context;
     page: Page | null;
     private maxRetries;
+    private stepScreenshots;
+    private tracingEnabled;
     /**
      * Modo de análisis: 'screenshot', 'html', o 'hybrid'
      * Cambia esto para optimizar costos vs precisión
@@ -164,15 +180,41 @@ export declare class PlaywrightAIAgent {
      *   ]
      * });
      */
-    executeFlow({ url, steps, stopOnError, delayBetweenSteps, analysisMode }: ExecuteFlowParams): Promise<FlowResult>;
+    executeFlow({ url, steps, stopOnError, delayBetweenSteps, analysisMode, enableTracing, generateReport, reportDir }: ExecuteFlowParams): Promise<FlowResult>;
     /**
      * Ejecuta una instrucción en la página actual (sin navegar)
      * Útil para continuar un flujo desde donde quedó
      */
     executeStep(instruction: string): Promise<ExecutionResult>;
     /**
-     * Cierra el navegador
+     * Cierra el navegador y guarda el trace si está habilitado
      */
     close(): Promise<void>;
+    /**
+     * Inicia el tracing de Playwright
+     */
+    startTracing(reportDir: string): Promise<void>;
+    /**
+     * Detiene el tracing y guarda el archivo
+     */
+    stopTracing(reportDir: string): Promise<string>;
+    /**
+     * Captura screenshot de un paso
+     */
+    private captureStepScreenshot;
+    /**
+     * Genera un reporte HTML con los resultados del flujo
+     */
+    generateHTMLReport(result: FlowResult, reportDir: string): Promise<string>;
+    /**
+     * Genera un payload listo para enviar a Slack via webhook
+     * @param result Resultado del flujo
+     * @param options Opciones adicionales para el mensaje
+     */
+    generateSlackPayload(result: FlowResult, options?: {
+        channel?: string;
+        projectName?: string;
+        buildUrl?: string;
+    }): object;
 }
 //# sourceMappingURL=ai-agent.d.ts.map

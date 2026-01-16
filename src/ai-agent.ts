@@ -1,5 +1,7 @@
-import { chromium, Browser, Page, Locator } from '@playwright/test';
+import { chromium, Browser, Page, Locator, BrowserContext } from '@playwright/test';
 import { createLLMProvider, LLMProvider, AIDecision, AIAction } from './llm-providers.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import 'dotenv/config';
 
 /**
@@ -68,6 +70,19 @@ export interface ExecuteFlowParams {
    * - 'hybrid': Ambos (más preciso, balance de tokens)
    */
   analysisMode?: AnalysisMode;
+  /**
+   * Habilitar tracing de Playwright para generar reportes
+   * Genera un archivo .zip con capturas, DOM, network, etc.
+   */
+  enableTracing?: boolean;
+  /**
+   * Generar reporte HTML al finalizar
+   */
+  generateReport?: boolean;
+  /**
+   * Directorio donde guardar los reportes (default: './test-results')
+   */
+  reportDir?: string;
 }
 
 /**
@@ -104,8 +119,11 @@ export interface InteractiveElement {
 export class PlaywrightAIAgent {
   private llmProvider: LLMProvider | null = null;
   private browser: Browser | null = null;
+  private context: BrowserContext | null = null;
   public page: Page | null = null;
   private maxRetries = 3;
+  private stepScreenshots: Array<{ step: number; path: string; success: boolean }> = [];
+  private tracingEnabled = false;
   
   /**
    * Modo de análisis: 'screenshot', 'html', o 'hybrid'
@@ -138,8 +156,14 @@ export class PlaywrightAIAgent {
       headless: false, // Ver lo que hace el agente
       slowMo: 500 // Ralentizar para observar
     });
-    this.page = await this.browser.newPage();
-    await this.page.setViewportSize({ width: 1280, height: 720 });
+    
+    // Crear contexto (necesario para tracing)
+    this.context = await this.browser.newContext({
+      viewport: { width: 1280, height: 720 },
+      recordVideo: undefined // Puedes habilitar video: { dir: './videos' }
+    });
+    
+    this.page = await this.context.newPage();
   }
 
   /**
@@ -860,12 +884,23 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     steps, 
     stopOnError = true, 
     delayBetweenSteps = 2000,
-    analysisMode
+    analysisMode,
+    enableTracing = false,
+    generateReport = false,
+    reportDir = './test-results'
   }: ExecuteFlowParams): Promise<FlowResult> {
     if (!this.page) throw new Error('Agente no inicializado. Llama a initialize() primero.');
     
     // Usar el modo pasado por parámetro o el configurado en la instancia
     if (analysisMode) this.analysisMode = analysisMode;
+    
+    // Limpiar screenshots anteriores
+    this.stepScreenshots = [];
+    
+    // Iniciar tracing si está habilitado
+    if (enableTracing) {
+      await this.startTracing(reportDir);
+    }
     
     console.log('\n' + '═'.repeat(80));
     console.log('🔄 PLAYWRIGHT AI AGENT - FLUJO COMPLETO');
@@ -874,7 +909,9 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     console.log(`📋 Total de pasos: ${steps.length}`);
     console.log(`⏱️  Delay entre pasos: ${delayBetweenSteps}ms`);
     console.log(`🛑 Detener en error: ${stopOnError ? 'Sí' : 'No'}`);
-    console.log(`📊 Modo de análisis: ${this.analysisMode}\n`);
+    console.log(`📊 Modo de análisis: ${this.analysisMode}`);
+    console.log(`📝 Tracing: ${enableTracing ? 'Habilitado' : 'Deshabilitado'}`);
+    console.log(`📄 Reporte HTML: ${generateReport ? 'Sí' : 'No'}\n`);
     
     console.log('📝 Pasos a ejecutar:');
     steps.forEach((step, i) => console.log(`   ${i + 1}. ${step}`));
@@ -915,6 +952,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         await this.page.waitForTimeout(delayBetweenSteps);
         currentUrl = this.page.url();
 
+        // Capturar screenshot del paso completado
+        if (generateReport) {
+          await this.captureStepScreenshot(stepNumber, true, reportDir);
+        }
+
         stepResults.push({
           step: stepNumber,
           instruction,
@@ -927,6 +969,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       } catch (error) {
         const errorMessage = (error as Error).message;
         console.error(`\n❌ Error en paso ${stepNumber}: ${errorMessage}`);
+        
+        // Capturar screenshot del error
+        if (generateReport) {
+          await this.captureStepScreenshot(stepNumber, false, reportDir);
+        }
         
         stepResults.push({
           step: stepNumber,
@@ -962,13 +1009,24 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
     console.log('═'.repeat(80) + '\n');
 
-    return {
+    const flowResult: FlowResult = {
       success: allSuccess,
       totalSteps: steps.length,
       completedSteps,
       steps: stepResults,
       finalUrl: currentUrl
     };
+
+    // Generar reportes si están habilitados
+    if (enableTracing) {
+      await this.stopTracing(reportDir);
+    }
+    
+    if (generateReport) {
+      await this.generateHTMLReport(flowResult, reportDir);
+    }
+
+    return flowResult;
   }
 
   /**
@@ -985,11 +1043,330 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   }
 
   /**
-   * Cierra el navegador
+   * Cierra el navegador y guarda el trace si está habilitado
    */
   async close(): Promise<void> {
+    if (this.context) {
+      await this.context.close();
+    }
     if (this.browser) {
       await this.browser.close();
     }
+  }
+
+  /**
+   * Inicia el tracing de Playwright
+   */
+  async startTracing(reportDir: string): Promise<void> {
+    if (!this.context) throw new Error('Contexto no inicializado');
+    
+    // Crear directorio si no existe
+    if (!fs.existsSync(reportDir)) {
+      fs.mkdirSync(reportDir, { recursive: true });
+    }
+    
+    await this.context.tracing.start({
+      screenshots: true,
+      snapshots: true,
+      sources: true
+    });
+    
+    this.tracingEnabled = true;
+    console.log(`📝 Tracing habilitado. Los reportes se guardarán en: ${reportDir}`);
+  }
+
+  /**
+   * Detiene el tracing y guarda el archivo
+   */
+  async stopTracing(reportDir: string): Promise<string> {
+    if (!this.context || !this.tracingEnabled) return '';
+    
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const tracePath = path.join(reportDir, `trace-${timestamp}.zip`);
+    
+    await this.context.tracing.stop({ path: tracePath });
+    this.tracingEnabled = false;
+    
+    console.log(`\n📦 Trace guardado en: ${tracePath}`);
+    console.log(`   Para ver el trace ejecuta: npx playwright show-trace ${tracePath}`);
+    
+    return tracePath;
+  }
+
+  /**
+   * Captura screenshot de un paso
+   */
+  private async captureStepScreenshot(stepNumber: number, success: boolean, reportDir: string): Promise<string> {
+    if (!this.page) return '';
+    
+    const screenshotDir = path.join(reportDir, 'screenshots');
+    if (!fs.existsSync(screenshotDir)) {
+      fs.mkdirSync(screenshotDir, { recursive: true });
+    }
+    
+    const status = success ? 'passed' : 'failed';
+    const screenshotPath = path.join(screenshotDir, `step-${stepNumber}-${status}.png`);
+    
+    await this.page.screenshot({ path: screenshotPath, fullPage: false });
+    
+    this.stepScreenshots.push({ step: stepNumber, path: screenshotPath, success });
+    
+    return screenshotPath;
+  }
+
+  /**
+   * Genera un reporte HTML con los resultados del flujo
+   */
+  async generateHTMLReport(result: FlowResult, reportDir: string): Promise<string> {
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const reportPath = path.join(reportDir, `report-${timestamp}.html`);
+    
+    const stepsHtml = result.steps.map((step, index) => {
+      const screenshot = this.stepScreenshots.find(s => s.step === step.step);
+      let screenshotImg = '';
+      
+      // Embeber la imagen en base64 para que el HTML sea autocontenido (para Slack/CircleCI)
+      if (screenshot && fs.existsSync(screenshot.path)) {
+        const imageBuffer = fs.readFileSync(screenshot.path);
+        const base64Image = imageBuffer.toString('base64');
+        screenshotImg = `<img src="data:image/png;base64,${base64Image}" alt="Step ${step.step}" style="max-width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px;">`;
+      }
+      
+      return `
+        <div class="step ${step.success ? 'passed' : 'failed'}">
+          <div class="step-header">
+            <span class="step-number">Paso ${step.step}</span>
+            <span class="step-status ${step.success ? 'passed' : 'failed'}">
+              ${step.success ? '✅ Completado' : '❌ Fallido'}
+            </span>
+          </div>
+          <div class="step-instruction">${step.instruction}</div>
+          ${step.error ? `<div class="step-error">❌ Error: ${step.error}</div>` : ''}
+          ${screenshotImg}
+        </div>
+      `;
+    }).join('');
+
+    const html = `
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reporte de Automatización - Playwright AI Agent</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { 
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; 
+      margin: 0; 
+      padding: 20px; 
+      background: #f5f5f5; 
+    }
+    .container { max-width: 1200px; margin: 0 auto; }
+    .header { 
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); 
+      color: white; 
+      padding: 30px; 
+      border-radius: 10px; 
+      margin-bottom: 20px;
+    }
+    .header h1 { margin: 0 0 10px 0; }
+    .summary { 
+      display: grid; 
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+      gap: 15px; 
+      margin-bottom: 20px; 
+    }
+    .summary-card { 
+      background: white; 
+      padding: 20px; 
+      border-radius: 10px; 
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1); 
+      text-align: center;
+    }
+    .summary-card h3 { margin: 0; color: #666; font-size: 14px; }
+    .summary-card .value { font-size: 36px; font-weight: bold; margin: 10px 0; }
+    .summary-card .value.success { color: #22c55e; }
+    .summary-card .value.error { color: #ef4444; }
+    .summary-card .value.total { color: #3b82f6; }
+    .steps-container { background: white; border-radius: 10px; padding: 20px; }
+    .step { 
+      border: 1px solid #e5e7eb; 
+      border-radius: 8px; 
+      padding: 15px; 
+      margin-bottom: 15px; 
+    }
+    .step.passed { border-left: 4px solid #22c55e; }
+    .step.failed { border-left: 4px solid #ef4444; background: #fef2f2; }
+    .step-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+    .step-number { font-weight: bold; color: #374151; }
+    .step-status.passed { color: #22c55e; }
+    .step-status.failed { color: #ef4444; }
+    .step-instruction { color: #4b5563; margin-bottom: 10px; }
+    .step-error { color: #ef4444; font-size: 14px; background: #fee2e2; padding: 10px; border-radius: 4px; }
+    .footer { text-align: center; color: #9ca3af; margin-top: 20px; font-size: 14px; }
+    .trace-link { 
+      display: inline-block; 
+      background: #3b82f6; 
+      color: white; 
+      padding: 10px 20px; 
+      border-radius: 5px; 
+      text-decoration: none; 
+      margin-top: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>🤖 Playwright AI Agent - Reporte de Ejecución</h1>
+      <p>Generado: ${new Date().toLocaleString('es-ES')}</p>
+      <p>URL Final: ${result.finalUrl || 'N/A'}</p>
+    </div>
+    
+    <div class="summary">
+      <div class="summary-card">
+        <h3>Total de Pasos</h3>
+        <div class="value total">${result.totalSteps}</div>
+      </div>
+      <div class="summary-card">
+        <h3>Completados</h3>
+        <div class="value success">${result.completedSteps}</div>
+      </div>
+      <div class="summary-card">
+        <h3>Fallidos</h3>
+        <div class="value error">${result.totalSteps - result.completedSteps}</div>
+      </div>
+      <div class="summary-card">
+        <h3>Estado</h3>
+        <div class="value ${result.success ? 'success' : 'error'}">
+          ${result.success ? '✅ Éxito' : '❌ Fallido'}
+        </div>
+      </div>
+    </div>
+
+    <div class="steps-container">
+      <h2>📝 Detalle de Pasos</h2>
+      ${stepsHtml}
+    </div>
+
+    <div class="footer">
+      <p>Generado por Playwright AI Agent</p>
+      <p>Para ver el trace detallado: <code>npx playwright show-trace trace-*.zip</code></p>
+    </div>
+  </div>
+</body>
+</html>
+    `;
+
+    fs.writeFileSync(reportPath, html);
+    console.log(`\n📄 Reporte HTML guardado en: ${reportPath}`);
+    
+    // También guardar JSON para integración con webhooks (Slack, etc.)
+    const jsonReport = {
+      timestamp: new Date().toISOString(),
+      success: result.success,
+      totalSteps: result.totalSteps,
+      completedSteps: result.completedSteps,
+      failedSteps: result.totalSteps - result.completedSteps,
+      finalUrl: result.finalUrl,
+      steps: result.steps.map(s => ({
+        step: s.step,
+        instruction: s.instruction,
+        success: s.success,
+        error: s.error || null
+      })),
+      reportHtmlPath: reportPath,
+      tracePath: fs.existsSync(path.join(reportDir, 'trace.zip')) 
+        ? path.join(reportDir, 'trace.zip') 
+        : null
+    };
+    
+    const jsonPath = path.join(reportDir, `report-${timestamp}.json`);
+    fs.writeFileSync(jsonPath, JSON.stringify(jsonReport, null, 2));
+    console.log(`📊 Reporte JSON guardado en: ${jsonPath}`);
+    
+    return reportPath;
+  }
+
+  /**
+   * Genera un payload listo para enviar a Slack via webhook
+   * @param result Resultado del flujo
+   * @param options Opciones adicionales para el mensaje
+   */
+  generateSlackPayload(result: FlowResult, options?: { 
+    channel?: string; 
+    projectName?: string;
+    buildUrl?: string;
+  }): object {
+    const statusEmoji = result.success ? '✅' : '❌';
+    const statusText = result.success ? 'Exitoso' : 'Fallido';
+    const color = result.success ? '#22c55e' : '#ef4444';
+    
+    const failedSteps = result.steps.filter(s => !s.success);
+    const failedText = failedSteps.length > 0 
+      ? failedSteps.map(s => `• Paso ${s.step}: ${s.error}`).join('\n')
+      : 'Ninguno';
+
+    return {
+      channel: options?.channel,
+      attachments: [
+        {
+          color: color,
+          blocks: [
+            {
+              type: 'header',
+              text: {
+                type: 'plain_text',
+                text: `${statusEmoji} Playwright AI Agent - ${statusText}`,
+                emoji: true
+              }
+            },
+            {
+              type: 'section',
+              fields: [
+                {
+                  type: 'mrkdwn',
+                  text: `*Proyecto:*\n${options?.projectName || 'Playwright AI'}`
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Estado:*\n${statusText}`
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Pasos Completados:*\n${result.completedSteps}/${result.totalSteps}`
+                },
+                {
+                  type: 'mrkdwn',
+                  text: `*Fecha:*\n${new Date().toLocaleString('es-ES')}`
+                }
+              ]
+            },
+            ...(failedSteps.length > 0 ? [{
+              type: 'section',
+              text: {
+                type: 'mrkdwn',
+                text: `*❌ Pasos Fallidos:*\n${failedText}`
+              }
+            }] : []),
+            ...(options?.buildUrl ? [{
+              type: 'actions',
+              elements: [
+                {
+                  type: 'button',
+                  text: {
+                    type: 'plain_text',
+                    text: '📊 Ver Reporte',
+                    emoji: true
+                  },
+                  url: options.buildUrl
+                }
+              ]
+            }] : [])
+          ]
+        }
+      ]
+    };
   }
 }

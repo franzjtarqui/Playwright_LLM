@@ -11,6 +11,11 @@ import { PlaywrightAIAgent } from './ai-agent.js';
 async function runDemo(): Promise<void> {
   const agent = new PlaywrightAIAgent();
   
+  // Obtener credenciales de variables de entorno
+  const testEmail = process.env.TEST_EMAIL;
+  const testPassword = process.env.TEST_PASSWORD;
+  const testUrl = process.env.TEST_URL || '';
+  
   try {
     // Inicializar navegador
     await agent.initialize();
@@ -24,10 +29,10 @@ async function runDemo(): Promise<void> {
     // Ejecutar flujo completo con múltiples pasos
     // NOTA: Cada paso es independiente y debe describir exactamente lo que debe hacer
     const result = await agent.executeFlow({
-      url: 'https://gmodelo.deltaxbeta.com/',
+      url: testUrl,
       steps: [
         // Paso 1: Login
-        'Ingresar correo electronico: ab.demo@deltax.la, contraseña: 12345678 y hacer click en el botón de ingresar',
+        `Ingresar correo electronico: ${testEmail}, contraseña: ${testPassword} y hacer click en el botón de ingresar`,
         // Paso 2: Verificar título
         'Verificar el titulo: Informe operativo, hacer click en la opcion: Rutas, despues hacer click en: Configuración de rutas',
         // Paso 3: Configuración

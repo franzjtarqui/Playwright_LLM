@@ -6,3 +6,5 @@ playwright-report/
 playwright/.cache/
 screenshots/
 *.log
+# Caché de selectores (regenerable)
+selector-cache.json

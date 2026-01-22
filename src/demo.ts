@@ -7,9 +7,24 @@ import { PlaywrightAIAgent } from './ai-agent.js';
  * - 'html': Solo extrae elementos interactivos del DOM (más barato, rápido)
  * - 'screenshot': Solo envía imagen de la página (más visual, más tokens)
  * - 'hybrid': Envía ambos (más preciso, balance de costo)
+ * 
+ * CACHÉ DE SELECTORES:
+ * - Guarda selectores ya descubiertos en './selector-cache.json'
+ * - Evita consultas repetitivas a la IA (ahorra tokens)
+ * - Se invalida automáticamente si el selector falla 3 veces
+ * - TTL de 24 horas por defecto
  */
 async function runDemo(): Promise<void> {
-  const agent = new PlaywrightAIAgent();
+  // Configuración del caché (opcional)
+  const agent = new PlaywrightAIAgent({
+    // maxSize: 500,              // Máximo de entradas en caché
+    // defaultTTL: 24 * 60 * 60 * 1000,  // 24 horas
+    // maxFailures: 3,            // Fallos antes de invalidar
+    // debug: true,               // Mostrar logs del caché
+  });
+  
+  // También puedes deshabilitar el caché si lo necesitas:
+  // agent.setSelectorCache(false);
   
   // Obtener credenciales de variables de entorno
   const testEmail = process.env.TEST_EMAIL;
@@ -24,7 +39,8 @@ async function runDemo(): Promise<void> {
     console.log('Este demo mostrará cómo el agente IA puede:');
     console.log('  1. Analizar visualmente una página de login');
     console.log('  2. Entender instrucciones en lenguaje natural');
-    console.log('  3. Ejecutar múltiples pasos SIN selectores predefinidos\n');
+    console.log('  3. Ejecutar múltiples pasos SIN selectores predefinidos');
+    console.log('  4. Usar CACHÉ para ahorrar tokens en acciones repetitivas\n');
     
     // Ejecutar flujo completo con múltiples pasos
     // NOTA: Cada paso es independiente y debe describir exactamente lo que debe hacer

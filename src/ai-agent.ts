@@ -1,5 +1,6 @@
 import { chromium, Browser, Page, Locator, BrowserContext } from '@playwright/test';
 import { createLLMProvider, LLMProvider, AIDecision, AIAction } from './llm-providers.js';
+import { SelectorCacheManager, SelectorCacheConfig, CachedSelector, CachedAction } from './selector-cache.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import 'dotenv/config';
@@ -125,11 +126,28 @@ export class PlaywrightAIAgent {
   private stepScreenshots: Array<{ step: number; path: string; success: boolean }> = [];
   private tracingEnabled = false;
   
+  /** Caché de selectores para ahorrar tokens */
+  private selectorCache: SelectorCacheManager;
+  /** Habilitar/deshabilitar el uso del caché */
+  public useSelectorCache: boolean = true;
+  
   /**
    * Modo de análisis: 'screenshot', 'html', o 'hybrid'
    * Cambia esto para optimizar costos vs precisión
    */
   public analysisMode: AnalysisMode = 'html'; // Por defecto usa HTML (más barato)
+
+  /**
+   * Constructor del agente
+   * @param cacheConfig Configuración opcional del caché de selectores
+   */
+  constructor(cacheConfig?: Partial<SelectorCacheConfig>) {
+    this.selectorCache = new SelectorCacheManager({
+      debug: true,  // Mostrar logs del caché
+      cacheFilePath: './selector-cache.json',
+      ...cacheConfig,
+    });
+  }
 
   /**
    * Configura el modo de análisis de la página
@@ -143,13 +161,39 @@ export class PlaywrightAIAgent {
   }
 
   /**
+   * Habilita o deshabilita el caché de selectores
+   * @param enabled true para habilitar, false para deshabilitar
+   * @returns this (para encadenamiento)
+   */
+  setSelectorCache(enabled: boolean): this {
+    this.useSelectorCache = enabled;
+    console.log(`💾 Caché de selectores: ${enabled ? 'HABILITADO' : 'DESHABILITADO'}`);
+    return this;
+  }
+
+  /**
+   * Limpia todo el caché de selectores
+   */
+  clearSelectorCache(): void {
+    this.selectorCache.clear();
+  }
+
+  /**
+   * Muestra estadísticas del caché
+   */
+  printCacheStats(): void {
+    this.selectorCache.printSummary();
+  }
+
+  /**
    * Inicializa el navegador y el proveedor de LLM
    */
   async initialize(): Promise<void> {
     // Inicializar proveedor de LLM (auto-detecta según .env)
     this.llmProvider = createLLMProvider();
     await this.llmProvider.initialize();
-    console.log(`🤖 Usando proveedor: ${this.llmProvider.name}\n`);
+    console.log(`🤖 Usando proveedor: ${this.llmProvider.name}`);
+    console.log(`💾 Caché de selectores: ${this.useSelectorCache ? 'HABILITADO' : 'DESHABILITADO'}\n`);
     
     // Inicializar navegador
     this.browser = await chromium.launch({ 
@@ -440,9 +484,44 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   /**
    * Consulta al LLM para analizar la página y decidir acciones
    * Soporta 3 modos: 'screenshot', 'html', 'hybrid'
+   * 
+   * AHORA CON CACHÉ: Si la instrucción ya fue procesada antes,
+   * usa el selector cacheado sin consultar al LLM (ahorra tokens)
    */
   private async analyzePageAndDecide(instruction: string, screenshot?: string): Promise<AIDecision> {
     if (!this.llmProvider) throw new Error('Proveedor LLM no inicializado');
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    const currentUrl = this.page.url();
+    
+    // 🔍 PASO 1: Buscar en caché
+    if (this.useSelectorCache) {
+      const cached = this.selectorCache.find(currentUrl, instruction);
+      
+      if (cached && cached.actions.length > 0) {
+        console.log(`💾 ¡CACHE HIT! Usando ${cached.actions.length} acciones guardadas (0 tokens)`);
+        cached.actions.forEach((action, i) => {
+          console.log(`   ${i + 1}. [${action.actionType}] ${action.selector}`);
+        });
+        
+        // Construir AIDecision desde el caché con TODAS las acciones
+        const cachedDecision: AIDecision = {
+          actions: cached.actions.map(action => ({
+            type: action.actionType as 'fill' | 'click' | 'press' | 'wait' | 'verify',
+            description: action.description,
+            locator: action.selector,
+            value: action.value,
+          })),
+          reasoning: `[DESDE CACHÉ] ${cached.reasoning}`,
+          needsVerification: false,
+        };
+        
+        return cachedDecision;
+      }
+    }
+    
+    // 🧠 PASO 2: Cache MISS - Consultar al LLM
+    console.log('🧠 Cache MISS - Consultando al LLM...');
     
     const context = await this.getPageContext();
     let elementsHtml: string | undefined;
@@ -486,7 +565,26 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
     
     try {
-      return JSON.parse(jsonText.trim()) as AIDecision;
+      const decision = JSON.parse(jsonText.trim()) as AIDecision;
+      
+      // 💾 PASO 3: Guardar TODAS las acciones en caché para futuras consultas
+      if (this.useSelectorCache && decision.actions.length > 0) {
+        const cachedActions = decision.actions.map(action => ({
+          selector: action.locator,
+          actionType: action.type,
+          description: action.description,
+          value: action.value,
+        }));
+        
+        this.selectorCache.set(
+          currentUrl,
+          instruction,
+          cachedActions,
+          decision.reasoning
+        );
+      }
+      
+      return decision;
     } catch (error) {
       console.error('❌ Error parseando JSON:', (error as Error).message);
       console.error('Texto recibido:', jsonText);
@@ -819,7 +917,10 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     console.log('='.repeat(80));
     console.log(`\n📍 URL: ${url}`);
     console.log(`💬 Instrucción: "${instruction}"`);
-    console.log(`📊 Modo de análisis: ${this.analysisMode}\n`);
+    console.log(`📊 Modo de análisis: ${this.analysisMode}`);
+    console.log(`💾 Caché: ${this.useSelectorCache ? 'HABILITADO' : 'DESHABILITADO'}\n`);
+
+    const executionUrl = this.page.url() || url;
 
     try {
       // 1. Navegar a la página
@@ -841,7 +942,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         await this.executeAction(action);
       }
 
-      // 4. Captura final (opcional, para debug)
+      // 4. Marcar éxito en caché
+      if (this.useSelectorCache) {
+        this.selectorCache.markSuccess(executionUrl, instruction);
+      }
+
+      // 5. Captura final (opcional, para debug)
       await this.page.waitForTimeout(1000);
 
       console.log('\n✅ Ejecución completada!');
@@ -855,6 +961,15 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
 
     } catch (error) {
       console.error('\n❌ Error durante la ejecución:', (error as Error).message);
+      
+      // Marcar fallo en caché (puede invalidar si hay muchos fallos)
+      if (this.useSelectorCache) {
+        const invalidated = this.selectorCache.markFailure(executionUrl, instruction);
+        if (invalidated) {
+          console.log('🔄 Selector cacheado invalidado, próxima vez consultará a IA');
+        }
+      }
+      
       console.error('='.repeat(80) + '\n');
       
       return {
@@ -910,7 +1025,8 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     console.log(`⏱️  Delay entre pasos: ${delayBetweenSteps}ms`);
     console.log(`🛑 Detener en error: ${stopOnError ? 'Sí' : 'No'}`);
     console.log(`📊 Modo de análisis: ${this.analysisMode}`);
-    console.log(`📝 Tracing: ${enableTracing ? 'Habilitado' : 'Deshabilitado'}`);
+    console.log(`� Caché de selectores: ${this.useSelectorCache ? 'HABILITADO' : 'DESHABILITADO'}`);
+    console.log(`�📝 Tracing: ${enableTracing ? 'Habilitado' : 'Deshabilitado'}`);
     console.log(`📄 Reporte HTML: ${generateReport ? 'Sí' : 'No'}\n`);
     
     console.log('📝 Pasos a ejecutar:');
@@ -952,6 +1068,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         await this.page.waitForTimeout(delayBetweenSteps);
         currentUrl = this.page.url();
 
+        // Marcar éxito en caché
+        if (this.useSelectorCache) {
+          this.selectorCache.markSuccess(currentUrl, instruction);
+        }
+
         // Capturar screenshot del paso completado
         if (generateReport) {
           await this.captureStepScreenshot(stepNumber, true, reportDir);
@@ -969,6 +1090,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       } catch (error) {
         const errorMessage = (error as Error).message;
         console.error(`\n❌ Error en paso ${stepNumber}: ${errorMessage}`);
+        
+        // Marcar fallo en caché
+        if (this.useSelectorCache) {
+          this.selectorCache.markFailure(currentUrl, instruction);
+        }
         
         // Capturar screenshot del error
         if (generateReport) {
@@ -1043,9 +1169,15 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   }
 
   /**
-   * Cierra el navegador y guarda el trace si está habilitado
+   * Cierra el navegador, guarda el caché y el trace si está habilitado
    */
   async close(): Promise<void> {
+    // Guardar caché y detener timer de limpieza
+    if (this.selectorCache) {
+      this.selectorCache.printSummary();
+      this.selectorCache.dispose();
+    }
+    
     if (this.context) {
       await this.context.close();
     }

@@ -109,6 +109,7 @@ export interface InteractiveElement {
   href?: string;
   role?: string;
   visible?: boolean;
+  label?: string;
 }
 
 /**
@@ -224,32 +225,152 @@ export class PlaywrightAIAgent {
   }
 
   /**
+   * Selectores comunes de loaders/spinners para detectar
+   */
+  private readonly LOADER_SELECTORS = [
+    // Spinners
+    '[class*="spinner"]',
+    '[class*="loading"]',
+    '[class*="loader"]',
+    '.spinner',
+    '.loading',
+    '.loader',
+    // Skeletons
+    '[class*="skeleton"]',
+    '.skeleton',
+    // Progress bars
+    '[role="progressbar"]',
+    '[class*="progress"]',
+    // Overlays
+    '[class*="overlay"]',
+    '.overlay',
+    // Material UI / Ant Design / Bootstrap
+    '.MuiCircularProgress-root',
+    '.MuiLinearProgress-root',
+    '.ant-spin',
+    '.ant-skeleton',
+    '.spinner-border',
+    '.spinner-grow',
+    // Otros comunes
+    '[data-loading="true"]',
+    '[data-testid*="loading"]',
+    '[data-testid*="spinner"]',
+  ];
+
+  /**
+   * Espera a que desaparezcan los loaders de la página
+   * @param timeout Tiempo máximo de espera en ms
+   */
+  private async waitForLoadersToDisappear(timeout: number = 15000): Promise<void> {
+    if (!this.page) return;
+    
+    const startTime = Date.now();
+    
+    // Combinar todos los selectores en uno
+    const combinedSelector = this.LOADER_SELECTORS.join(', ');
+    
+    while (Date.now() - startTime < timeout) {
+      // Verificar si hay loaders visibles
+      const hasVisibleLoaders = await this.page.evaluate((selector) => {
+        const elements = Array.from(document.querySelectorAll(selector));
+        for (const el of elements) {
+          const element = el as HTMLElement;
+          const rect = element.getBoundingClientRect();
+          const style = window.getComputedStyle(element);
+          const isVisible = rect.width > 0 && rect.height > 0 &&
+                           style.display !== 'none' &&
+                           style.visibility !== 'hidden' &&
+                           style.opacity !== '0';
+          if (isVisible) return true;
+        }
+        return false;
+      }, combinedSelector);
+      
+      if (!hasVisibleLoaders) {
+        return; // No hay loaders, continuar
+      }
+      
+      // Esperar un poco y volver a verificar
+      await this.page.waitForTimeout(200);
+    }
+    
+    console.log('   ⚠️ Timeout esperando que loaders desaparezcan');
+  }
+
+  /**
+   * Espera a que aria-busy sea false en toda la página
+   */
+  private async waitForAriaBusyFalse(timeout: number = 10000): Promise<void> {
+    if (!this.page) return;
+    
+    try {
+      await this.page.waitForFunction(() => {
+        // Buscar cualquier elemento con aria-busy="true"
+        const busyElements = document.querySelectorAll('[aria-busy="true"]');
+        return busyElements.length === 0;
+      }, { timeout });
+    } catch {
+      console.log('   ⚠️ Timeout esperando aria-busy=false');
+    }
+  }
+
+  /**
+   * Espera a que el DOM esté estable (sin cambios)
+   * @param stableTime Tiempo que debe permanecer sin cambios en ms
+   */
+  private async waitForDOMStable(stableTime: number = 500, timeout: number = 10000): Promise<void> {
+    if (!this.page) return;
+    
+    const startTime = Date.now();
+    let lastSnapshot = '';
+    let lastChangeTime = Date.now();
+    
+    while (Date.now() - startTime < timeout) {
+      try {
+        // Usar el contenido del body como snapshot simple
+        const currentSnapshot = await this.page.evaluate(() => {
+          return document.body?.innerHTML?.length.toString() || '';
+        });
+        
+        if (currentSnapshot !== lastSnapshot) {
+          lastSnapshot = currentSnapshot;
+          lastChangeTime = Date.now();
+        } else if (Date.now() - lastChangeTime >= stableTime) {
+          // El DOM no ha cambiado por el tiempo requerido
+          return;
+        }
+        
+        await this.page.waitForTimeout(100);
+      } catch {
+        await this.page.waitForTimeout(100);
+      }
+    }
+  }
+
+  /**
    * Espera a que la página esté completamente cargada y estable
-   * Esto es crucial después de navegaciones o acciones que cambian la página
+   * Incluye: network idle, loaders, aria-busy, y estabilidad del Accessibility Tree
    */
   private async waitForPageStable(): Promise<void> {
     if (!this.page) return;
     
     console.log('   ⏳ Esperando a que la página esté estable...');
     
+    // 1. Esperar a que no haya peticiones de red pendientes
     try {
-      // 1. Esperar a que no haya peticiones de red pendientes
       await this.page.waitForLoadState('networkidle', { timeout: 10000 });
     } catch {
       console.log('   ⚠️ Timeout en networkidle, continuando...');
     }
     
+    // 2. Esperar a que el DOM esté completamente cargado
     try {
-      // 2. Esperar a que el DOM esté completamente cargado
       await this.page.waitForLoadState('domcontentloaded', { timeout: 5000 });
     } catch {
       // Ignorar si ya pasó
     }
     
-    // 3. Pequeña espera adicional para renderizado de SPA/frameworks
-    await this.page.waitForTimeout(500);
-    
-    // 4. Esperar a que no haya animaciones/cambios en el DOM
+    // 3. Esperar a que document.readyState === 'complete'
     try {
       await this.page.waitForFunction(() => {
         return document.readyState === 'complete';
@@ -258,98 +379,147 @@ export class PlaywrightAIAgent {
       // Ignorar si ya está listo
     }
     
+    // 4. Esperar a que desaparezcan los loaders/spinners
+    console.log('   🔄 Verificando loaders...');
+    await this.waitForLoadersToDisappear(15000);
+    
+    // 5. Esperar a que aria-busy sea false
+    await this.waitForAriaBusyFalse(5000);
+    
+    // 6. Esperar estabilidad del DOM
+    console.log('   🌳 Verificando estabilidad del DOM...');
+    await this.waitForDOMStable(500, 5000);
+    
+    // 7. Pequeña espera adicional para renderizado final
+    await this.page.waitForTimeout(300);
+    
     console.log('   ✅ Página estable');
   }
 
   /**
-   * Extrae solo los elementos interactivos del DOM
-   * Esto reduce significativamente los tokens enviados a la IA
+   * Extrae elementos interactivos usando el Accessibility Tree
+   * Esto es más preciso y eficiente que escanear el DOM
    */
   private async extractInteractiveElements(): Promise<InteractiveElement[]> {
     if (!this.page) throw new Error('Página no inicializada');
     
-    // Esperar a que la página esté estable antes de extraer
+    // Esperar a que la página esté estable (incluyendo loaders)
     await this.waitForPageStable();
     
-    // El código dentro de evaluate() se ejecuta en el navegador
+    console.log('   🌳 Extrayendo elementos interactivos con información de accesibilidad...');
+    
+    // Extraer elementos con información de accesibilidad del DOM
     const elements = await this.page.evaluate((): InteractiveElement[] => {
+      const results: InteractiveElement[] = [];
+      
+      // Selectores para elementos interactivos
       const interactiveSelectors = [
-        'input',
+        // Elementos nativos interactivos
+        'input:not([type="hidden"])',
         'button',
-        'a',
+        'a[href]',
         'select',
         'textarea',
+        // Roles ARIA interactivos
         '[role="button"]',
         '[role="link"]',
         '[role="textbox"]',
+        '[role="checkbox"]',
+        '[role="radio"]',
+        '[role="combobox"]',
+        '[role="listbox"]',
         '[role="menuitem"]',
-        '[role="tab"]',
+        '[role="menuitemcheckbox"]',
+        '[role="menuitemradio"]',
         '[role="option"]',
-        '[role="listitem"]',
+        '[role="tab"]',
+        '[role="switch"]',
+        '[role="slider"]',
+        '[role="spinbutton"]',
+        '[role="searchbox"]',
+        // Elementos con eventos
         '[onclick]',
-        '[type="submit"]',
-        // Elementos de navegación y menú
-        'nav a',
-        'nav li',
-        'nav span',
-        '.sidebar a',
-        '.sidebar li', 
-        '.menu a',
-        '.menu li',
-        '[class*="nav"] a',
-        '[class*="nav"] li',
-        '[class*="menu"] a',
-        '[class*="menu"] li',
-        '[class*="sidebar"] a',
-        '[class*="sidebar"] li',
-        // Elementos clickeables comunes
-        'li[class*="item"]',
-        'div[class*="item"]',
-        'span[class*="link"]',
-        'div[class*="link"]'
+        '[tabindex]:not([tabindex="-1"])',
       ];
       
-      const results: InteractiveElement[] = [];
+      const allSelector = interactiveSelectors.join(', ');
+      const allElements = Array.from(document.querySelectorAll(allSelector));
       
-      interactiveSelectors.forEach((selector: string) => {
-        document.querySelectorAll(selector).forEach((el: Element) => {
-          const element = el as HTMLElement;
-          const rect = element.getBoundingClientRect();
-          const style = window.getComputedStyle(element);
-          const isVisible = rect.width > 0 && rect.height > 0 && 
-                           style.display !== 'none' &&
-                           style.visibility !== 'hidden';
-          
-          if (!isVisible) return;
-          
-          const text = element.textContent?.trim().substring(0, 100) || '';
-          const inputEl = element as HTMLInputElement;
-          
-          results.push({
-            tag: element.tagName.toLowerCase(),
-            type: element.getAttribute('type') || undefined,
-            id: element.id || undefined,
-            name: element.getAttribute('name') || undefined,
-            placeholder: element.getAttribute('placeholder') || undefined,
-            text: text || undefined,
-            ariaLabel: element.getAttribute('aria-label') || undefined,
-            value: inputEl.value || undefined,
-            href: element.getAttribute('href') || undefined,
-            role: element.getAttribute('role') || undefined,
-            visible: true
-          });
+      for (const el of allElements) {
+        const element = el as HTMLElement;
+        const rect = element.getBoundingClientRect();
+        const style = window.getComputedStyle(element);
+        
+        // Verificar visibilidad
+        const isVisible = rect.width > 0 && rect.height > 0 &&
+                         style.display !== 'none' &&
+                         style.visibility !== 'hidden' &&
+                         style.opacity !== '0';
+        
+        if (!isVisible) continue;
+        
+        // Obtener el nombre accesible (prioridad: aria-label > aria-labelledby > texto visible)
+        let accessibleName = element.getAttribute('aria-label') || '';
+        
+        if (!accessibleName) {
+          const labelledBy = element.getAttribute('aria-labelledby');
+          if (labelledBy) {
+            const labelEl = document.getElementById(labelledBy);
+            accessibleName = labelEl?.textContent?.trim() || '';
+          }
+        }
+        
+        if (!accessibleName) {
+          // Para inputs, buscar label asociado
+          if (element.tagName === 'INPUT' || element.tagName === 'SELECT' || element.tagName === 'TEXTAREA') {
+            const inputEl = element as HTMLInputElement;
+            const label = document.querySelector(`label[for="${inputEl.id}"]`);
+            accessibleName = label?.textContent?.trim() || '';
+          }
+        }
+        
+        if (!accessibleName) {
+          accessibleName = element.textContent?.trim().substring(0, 100) || '';
+        }
+        
+        const inputEl = element as HTMLInputElement;
+        const role = element.getAttribute('role') || 
+                    (element.tagName === 'BUTTON' ? 'button' : 
+                     element.tagName === 'A' ? 'link' :
+                     element.tagName === 'INPUT' ? 'textbox' : 
+                     element.tagName === 'SELECT' ? 'combobox' : '');
+        
+        // Detectar si el ID es dinámico de React (patrón :r\d+:)
+        const elementId = element.id || undefined;
+        const isDynamicId = elementId && (/^:r\d+:$/i.test(elementId) || /^:.*:$/.test(elementId) || /^mui-\d+$/.test(elementId));
+        
+        results.push({
+          tag: element.tagName.toLowerCase(),
+          type: element.getAttribute('type') || undefined,
+          id: isDynamicId ? undefined : elementId, // NO incluir IDs dinámicos
+          name: element.getAttribute('name') || undefined,
+          placeholder: element.getAttribute('placeholder') || undefined,
+          text: accessibleName || undefined,
+          ariaLabel: element.getAttribute('aria-label') || undefined,
+          value: inputEl.value || undefined,
+          href: element.getAttribute('href') || undefined,
+          role: role || undefined,
+          visible: true,
+          label: accessibleName || undefined // Label asociado (para formularios)
         });
-      });
+      }
       
       return results;
     });
     
-    // Eliminar duplicados y elementos vacíos
-    const unique = elements.filter((el, index, self) => 
-      index === self.findIndex(e => 
+    // Eliminar duplicados
+    const unique = elements.filter((el, index, self) =>
+      index === self.findIndex(e =>
         e.tag === el.tag && e.id === el.id && e.name === el.name && e.text === el.text
       )
     );
+    
+    console.log(`   ✅ Encontrados ${unique.length} elementos interactivos`);
     
     return unique;
   }
@@ -364,11 +534,17 @@ export class PlaywrightAIAgent {
       const parts = [`${index + 1}. <${el.tag}>`];
       
       if (el.type) parts.push(`type="${el.type}"`);
-      if (el.id) parts.push(`id="${el.id}"`);
+      // Priorizar atributos estables sobre IDs dinámicos
       if (el.name) parts.push(`name="${el.name}"`);
       if (el.placeholder) parts.push(`placeholder="${el.placeholder}"`);
+      // Mostrar label para campos de formulario (más útil que ID para la IA)
+      if (el.label && (el.tag === 'input' || el.tag === 'select' || el.tag === 'textarea')) {
+        parts.push(`label="${el.label}"`);
+      }
       if (el.ariaLabel) parts.push(`aria-label="${el.ariaLabel}"`);
       if (el.role) parts.push(`role="${el.role}"`);
+      // Solo incluir ID si existe y NO es dinámico (ya filtrado antes)
+      if (el.id) parts.push(`id="${el.id}"`);
       if (el.text && el.tag !== 'input') parts.push(`texto="${el.text}"`);
       if (el.href) parts.push(`href="${el.href.substring(0, 50)}..."`);
       
@@ -455,6 +631,9 @@ LOCATOR RULES:
 4. DO NOT mix multiple attributes in one locator
 5. Generate SEPARATE actions for each task
 6. Respond ONLY with valid JSON, no markdown
+7. NEVER use IDs that look like ":r65:", ":r0:", or similar - these are dynamic React IDs that change every session
+8. For form fields with labels, use "label='LabelText'" instead of dynamic IDs
+9. PREFER this order: name > placeholder > label > aria-label > text > id (only if stable)
 
 EXAMPLE - Multiple actions instruction:
 Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'Users'"
@@ -487,15 +666,34 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
    * 
    * AHORA CON CACHÉ: Si la instrucción ya fue procesada antes,
    * usa el selector cacheado sin consultar al LLM (ahorra tokens)
+   * 
+   * @param instruction Instrucción a ejecutar
+   * @param screenshot Screenshot opcional
+   * @param skipCache Si es true, ignora el caché y consulta directamente a la IA
    */
-  private async analyzePageAndDecide(instruction: string, screenshot?: string): Promise<AIDecision> {
+  private async analyzePageAndDecide(instruction: string, screenshot?: string, skipCache: boolean = false): Promise<AIDecision> {
     if (!this.llmProvider) throw new Error('Proveedor LLM no inicializado');
     if (!this.page) throw new Error('Página no inicializada');
     
-    const currentUrl = this.page.url();
+    // 📋 PASO 0: Esperar a que la página esté estable ANTES de verificar caché
+    // Esto asegura que la URL sea la correcta después de navegaciones
+    let elementsHtml: string | undefined;
+    if (this.analysisMode === 'html' || this.analysisMode === 'hybrid') {
+      console.log('📋 Extrayendo elementos interactivos del DOM...');
+      const elements = await this.extractInteractiveElements();
+      elementsHtml = this.formatElementsForAI(elements);
+      console.log(`   Encontrados: ${elements.length} elementos`);
+    } else {
+      // Incluso en modo screenshot, esperar estabilización básica
+      await this.page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
+    }
     
-    // 🔍 PASO 1: Buscar en caché
-    if (this.useSelectorCache) {
+    // Capturar URL DESPUÉS de que la página esté estable
+    const currentUrl = this.page.url();
+    console.log(`🔗 URL estable: ${currentUrl}`);
+    
+    // 🔍 PASO 1: Buscar en caché (si no se está saltando)
+    if (this.useSelectorCache && !skipCache) {
       const cached = this.selectorCache.find(currentUrl, instruction);
       
       if (cached && cached.actions.length > 0) {
@@ -514,6 +712,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           })),
           reasoning: `[DESDE CACHÉ] ${cached.reasoning}`,
           needsVerification: false,
+          fromCache: true,  // Marcar que viene del caché
         };
         
         return cachedDecision;
@@ -521,19 +720,14 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
     
     // 🧠 PASO 2: Cache MISS - Consultar al LLM
-    console.log('🧠 Cache MISS - Consultando al LLM...');
+    if (skipCache) {
+      console.log('🔄 Cache invalidado - Consultando al LLM para obtener selectores actualizados...');
+    } else {
+      console.log('🧠 Cache MISS - Consultando al LLM...');
+    }
     
     const context = await this.getPageContext();
-    let elementsHtml: string | undefined;
     let responseText: string;
-    
-    // Extraer elementos HTML si el modo lo requiere
-    if (this.analysisMode === 'html' || this.analysisMode === 'hybrid') {
-      console.log('📋 Extrayendo elementos interactivos del DOM...');
-      const elements = await this.extractInteractiveElements();
-      elementsHtml = this.formatElementsForAI(elements);
-      console.log(`   Encontrados: ${elements.length} elementos`);
-    }
     
     const prompt = this.generatePrompt(instruction, context, elementsHtml);
     
@@ -635,10 +829,34 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         return null;
       },
       
-      // 3. Por id extraído  
+      // 3. Por label (prioridad alta para campos de formulario)
+      async () => {
+        // Buscar por label= explícito en la descripción
+        const labelMatch = description.match(/label[=:]?\s*['"]?([^'"]+)['"]?/i);
+        if (labelMatch) {
+          const labelText = labelMatch[1].trim();
+          const loc = page.getByLabel(new RegExp(labelText, 'i')).first();
+          if (await loc.count() > 0) return loc;
+        }
+        // También buscar si la descripción contiene el nombre del campo (ej: "Fecha de nacimiento")
+        const fieldName = description.replace(/id[=:]?\s*['"][^'"]+['"]?/gi, '').trim();
+        if (fieldName && fieldName.length > 3) {
+          const loc = page.getByLabel(new RegExp(fieldName.split(/\s+/).join('.*'), 'i')).first();
+          if (await loc.count() > 0) return loc;
+        }
+        return null;
+      },
+      
+      // 4. Por id extraído (SOLO si no es ID dinámico de React)
       async () => {
         if (idMatch) {
           const id = idMatch[1];
+          // Detectar IDs dinámicos de React/MUI (patrón :r\d+: o similar)
+          const isDynamicReactId = /^:r\d+:$/i.test(id) || /^:.*:$/.test(id) || /^mui-\d+$/.test(id);
+          if (isDynamicReactId) {
+            console.log(`  ⚠️ ID dinámico detectado (${id}), buscando alternativas...`);
+            return null; // Saltar IDs dinámicos
+          }
           const loc = page.locator(`#${id}, [id="${id}"]`).first();
           if (await loc.count() > 0) return loc;
         }
@@ -930,16 +1148,43 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
 
       // 2. Analizar con IA (el método decide si usar screenshot o HTML según el modo)
       console.log('🧠 Analizando con IA...');
-      const decision = await this.analyzePageAndDecide(instruction);
+      let decision = await this.analyzePageAndDecide(instruction);
+      let usedCache = decision.fromCache || false;
 
       console.log('\n📋 Plan de acciones:');
       console.log(`   Razonamiento: ${decision.reasoning}`);
       console.log(`   Acciones: ${decision.actions.length}`);
 
-      // 3. Ejecutar acciones
+      // 3. Ejecutar acciones con retry si falla el caché
       console.log('\n🎬 Ejecutando acciones...');
-      for (const action of decision.actions) {
-        await this.executeAction(action);
+      try {
+        for (const action of decision.actions) {
+          await this.executeAction(action);
+        }
+      } catch (actionError) {
+        // Si falló y venía del caché, reintentar consultando a la IA
+        if (usedCache && this.useSelectorCache) {
+          console.log('\n🔄 Selector del caché falló, invalidando y consultando a IA...');
+          
+          // Invalidar el caché para esta instrucción
+          this.selectorCache.invalidate(executionUrl, instruction);
+          
+          // Reintentar con IA (sin usar caché)
+          decision = await this.analyzePageAndDecide(instruction, undefined, true);
+          
+          console.log(`\n📋 Nuevo Plan (desde IA): ${decision.reasoning}`);
+          console.log(`   Acciones: ${decision.actions.length}`);
+          
+          // Ejecutar las nuevas acciones
+          console.log('\n🎬 Reintentando con selectores actualizados...');
+          for (const action of decision.actions) {
+            await this.executeAction(action);
+          }
+          
+          console.log('   ✅ Retry exitoso con nuevos selectores');
+        } else {
+          throw actionError;
+        }
       }
 
       // 4. Marcar éxito en caché
@@ -1053,15 +1298,44 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       try {
         // Analizar con IA según el modo configurado
         console.log(`🧠 Analizando con IA (modo: ${this.analysisMode})...`);
-        const decision = await this.analyzePageAndDecide(instruction);
+        let decision = await this.analyzePageAndDecide(instruction);
+        let usedCache = decision.fromCache || false;
 
         console.log(`\n📋 Plan: ${decision.reasoning}`);
         console.log(`   Acciones: ${decision.actions.length}`);
 
-        // Ejecutar acciones
+        // Ejecutar acciones con retry si falla el caché
         console.log('\n🎬 Ejecutando acciones...');
-        for (const action of decision.actions) {
-          await this.executeAction(action);
+        try {
+          for (const action of decision.actions) {
+            await this.executeAction(action);
+          }
+        } catch (actionError) {
+          // Si falló y venía del caché, reintentar consultando a la IA
+          if (usedCache && this.useSelectorCache) {
+            console.log('\n🔄 Selector del caché falló, invalidando y consultando a IA...');
+            
+            // Invalidar el caché para esta instrucción
+            this.selectorCache.invalidate(currentUrl, instruction);
+            
+            // Reintentar con IA (sin usar caché)
+            decision = await this.analyzePageAndDecide(instruction, undefined, true);
+            
+            console.log(`\n📋 Nuevo Plan (desde IA): ${decision.reasoning}`);
+            console.log(`   Acciones: ${decision.actions.length}`);
+            
+            // Ejecutar las nuevas acciones
+            console.log('\n🎬 Reintentando con selectores actualizados...');
+            for (const action of decision.actions) {
+              await this.executeAction(action);
+            }
+            
+            // Si llegamos aquí, funcionó - el caché se actualizó en analyzePageAndDecide
+            console.log('   ✅ Retry exitoso con nuevos selectores');
+          } else {
+            // No venía del caché o el caché está deshabilitado, propagar el error
+            throw actionError;
+          }
         }
 
         // Esperar a que la página se estabilice
@@ -1091,8 +1365,10 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         const errorMessage = (error as Error).message;
         console.error(`\n❌ Error en paso ${stepNumber}: ${errorMessage}`);
         
-        // Marcar fallo en caché
+        // Nota: Si llegamos aquí después de un retry, el caché ya fue invalidado
+        // Solo marcamos fallo si es un error nuevo
         if (this.useSelectorCache) {
+          // El caché ya fue invalidado si hubo retry, markFailure es seguro
           this.selectorCache.markFailure(currentUrl, instruction);
         }
         

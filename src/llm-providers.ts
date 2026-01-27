@@ -26,6 +26,8 @@ export interface AIDecision {
   actions: AIAction[];
   reasoning: string;
   needsVerification: boolean;
+  /** Indica si la decisión viene del caché (para retry si falla) */
+  fromCache?: boolean;
 }
 
 // ============================================

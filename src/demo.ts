@@ -50,11 +50,11 @@ async function runDemo(): Promise<void> {
         // Paso 1: Login
         `Ingresar correo electronico: ${testEmail}, contraseña: ${testPassword} y hacer click en el botón de ingresar`,
         // Paso 2: Verificar título
-        'Verificar el titulo: Informe operativo, hacer click en la opcion: Rutas, despues hacer click en: Configuración de rutas',
+        'Verificar el titulo: Informe operativo, hacer click en la opcion: Mi flota, despues hacer click en: Operadores',
         // Paso 3: Configuración
-        'En la sección de Configuración de rutas, hacer click en el botón: Crear ruta',
+        'En la sección de Configuración de Operadores, hacer click en el botón: Crear nuevo',
         // Paso 4: Llenar formulario
-        'Llenar el formulario campo Tiempo en origen: 10, Tiempo en destino: 15, Distancia: 3'
+        'Llenar el formulario campo Nombre(s): Jonas Alde, Apellido(s): Ticona Mamani, Fecha de nacimiento: 01/01/2008, Apto para operar:(seleccionar opcion) Solo full, Nro. de licencia de conducir: 33333211112'
       ],
       stopOnError: true,       // Detener si hay error
       delayBetweenSteps: 4000, // Esperar 4 segundos entre pasos

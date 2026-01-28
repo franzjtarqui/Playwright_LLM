@@ -2,9 +2,12 @@
  * Script simple para ejecutar tests con configuración
  */
 import { FlowRunner } from '../src/runner/index.js';
-import config from './config.js';
+import { loadConfig } from '../src/config/index.js';
 
 async function main() {
+  // Cargar configuración desde ai-test.config.ts
+  const config = await loadConfig();
+  
   // Parsear argumentos de línea de comandos
   const args = process.argv.slice(2);
   
@@ -27,7 +30,17 @@ async function main() {
   }
   
   const runner = new FlowRunner({
-    ...config,
+    testDir: config.testDir,
+    baseUrl: config.baseUrl,
+    generateReport: config.reports.html.enabled,
+    reportDir: config.reportDir,
+    enableTracing: config.reports.trace.enabled,
+    traceMode: config.reports.trace.mode,
+    headless: config.browser.headless,
+    slowMo: config.browser.slowMo,
+    failFast: config.execution.failFast,
+    retries: config.execution.retries,
+    config: config,
     tags: tags.length > 0 ? tags : undefined,
     excludeTags: excludeTags.length > 0 ? excludeTags : undefined,
     nameFilter

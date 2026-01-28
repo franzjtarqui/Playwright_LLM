@@ -1,6 +1,7 @@
 import { PlaywrightAIAgent } from '../core/agent.js';
 import { FlowLoader } from './flow-loader.js';
 import { VariableResolver } from './variable-resolver.js';
+import { AITestConfig, defaultConfig } from '../config/types.js';
 import { 
   FlowDefinition, 
   RunnerOptions, 
@@ -17,18 +18,26 @@ export class FlowRunner {
   private loader: FlowLoader;
   private agent: PlaywrightAIAgent | null = null;
   private options: RunnerOptions;
+  private config: AITestConfig;
   
   constructor(options: RunnerOptions = {}) {
     this.loader = new FlowLoader();
+    this.config = options.config || defaultConfig;
     this.options = {
-      testDir: './tests/flows',
-      generateReport: true,
-      reportDir: './playwright-report',
-      enableTracing: true,
-      headless: false,
-      retries: 0,
-      failFast: false,
-      ...options
+      testDir: options.testDir || this.config.testDir,
+      generateReport: options.generateReport ?? this.config.reports.html.enabled,
+      reportDir: options.reportDir || this.config.reportDir,
+      enableTracing: options.enableTracing ?? this.config.reports.trace.enabled,
+      traceMode: options.traceMode || this.config.reports.trace.mode,
+      headless: options.headless ?? this.config.browser.headless,
+      slowMo: options.slowMo ?? this.config.browser.slowMo,
+      retries: options.retries ?? this.config.execution.retries,
+      failFast: options.failFast ?? this.config.execution.failFast,
+      baseUrl: options.baseUrl || this.config.baseUrl,
+      tags: options.tags,
+      excludeTags: options.excludeTags,
+      nameFilter: options.nameFilter,
+      config: this.config
     };
   }
   
@@ -80,7 +89,10 @@ export class FlowRunner {
       this.agent = new PlaywrightAIAgent();
       
       try {
-        await this.agent.initialize({ headless: this.options.headless });
+        await this.agent.initialize({ 
+          headless: this.options.headless,
+          slowMo: this.options.slowMo
+        });
         const result = await this.runFlow(flow);
         results.push(result);
         
@@ -165,12 +177,16 @@ export class FlowRunner {
       const result = await this.agent!.executeFlow({
         url: resolvedUrl || '',
         steps: resolvedSteps,
-        stopOnError: true,
-        delayBetweenSteps: definition.delayBetweenSteps || 2000,
-        analysisMode: definition.analysisMode || 'html',
+        stopOnError: this.config.execution.stopOnError,
+        delayBetweenSteps: definition.delayBetweenSteps || this.config.execution.delayBetweenSteps,
+        analysisMode: definition.analysisMode || this.config.ai.analysisMode,
         enableTracing: this.options.enableTracing,
+        traceMode: this.options.traceMode,
         generateReport: this.options.generateReport,
-        reportDir: this.options.reportDir
+        generateJsonReport: this.config.reports.json.enabled,
+        reportDir: this.options.reportDir,
+        screenshots: this.config.screenshots,
+        flowName: definition.name
       });
       
       // Convertir resultados

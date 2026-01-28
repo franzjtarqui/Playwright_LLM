@@ -85,13 +85,35 @@ export interface ExecuteFlowParams {
    */
   enableTracing?: boolean;
   /**
+   * Modo de tracing: 'always' | 'on-failure' | 'never'
+   */
+  traceMode?: 'always' | 'on-failure' | 'never';
+  /**
    * Generar reporte HTML al finalizar
    */
   generateReport?: boolean;
   /**
+   * Generar reporte JSON al finalizar
+   */
+  generateJsonReport?: boolean;
+  /**
    * Directorio donde guardar los reportes (default: './test-results')
    */
   reportDir?: string;
+  /**
+   * Configuración de capturas de pantalla
+   */
+  screenshots?: {
+    enabled: boolean;
+    mode: 'always' | 'on-failure' | 'never';
+    fullPage: boolean;
+    format: 'png' | 'jpeg';
+    embedInHtml: boolean;
+  };
+  /**
+   * Nombre del flow (para el reporte)
+   */
+  flowName?: string;
 }
 
 /**
@@ -1257,8 +1279,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     delayBetweenSteps = 2000,
     analysisMode,
     enableTracing = false,
+    traceMode = 'always',
     generateReport = false,
-    reportDir = './test-results'
+    generateJsonReport = true,
+    reportDir = './test-results',
+    screenshots = { enabled: true, mode: 'always', fullPage: false, format: 'png', embedInHtml: true },
+    flowName
   }: ExecuteFlowParams): Promise<FlowResult> {
     if (!this.page) throw new Error('Agente no inicializado. Llama a initialize() primero.');
     
@@ -1268,8 +1294,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     // Limpiar screenshots anteriores
     this.stepScreenshots = [];
     
+    // Determinar si debemos usar tracing
+    const shouldTrace = enableTracing && traceMode !== 'never';
+    
     // Iniciar tracing si está habilitado
-    if (enableTracing) {
+    if (shouldTrace) {
       await this.startTracing(reportDir);
     }
     
@@ -1281,8 +1310,9 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     console.log(`⏱️  Delay entre pasos: ${delayBetweenSteps}ms`);
     console.log(`🛑 Detener en error: ${stopOnError ? 'Sí' : 'No'}`);
     console.log(`📊 Modo de análisis: ${this.analysisMode}`);
-    console.log(`� Caché de selectores: ${this.useSelectorCache ? 'HABILITADO' : 'DESHABILITADO'}`);
-    console.log(`�📝 Tracing: ${enableTracing ? 'Habilitado' : 'Deshabilitado'}`);
+    console.log(`📷 Capturas: ${screenshots.enabled ? screenshots.mode : 'Deshabilitadas'}`);
+    console.log(`💾 Caché de selectores: ${this.useSelectorCache ? 'HABILITADO' : 'DESHABILITADO'}`);
+    console.log(`📝 Tracing: ${shouldTrace ? traceMode : 'Deshabilitado'}`);
     console.log(`📄 Reporte HTML: ${generateReport ? 'Sí' : 'No'}\n`);
     
     console.log('📝 Pasos a ejecutar:');
@@ -1361,9 +1391,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           this.selectorCache.markSuccess(currentUrl, instruction);
         }
 
-        // Capturar screenshot del paso completado
-        if (generateReport) {
-          await this.captureStepScreenshot(stepNumber, true, reportDir);
+        // Capturar screenshot del paso completado (según configuración)
+        const shouldCaptureSuccess = screenshots.enabled && 
+          (screenshots.mode === 'always');
+        if (generateReport && shouldCaptureSuccess) {
+          await this.captureStepScreenshot(stepNumber, true, reportDir, screenshots.fullPage);
         }
 
         const stepDuration = Date.now() - stepStartTime;
@@ -1388,9 +1420,11 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           this.selectorCache.markFailure(currentUrl, instruction);
         }
         
-        // Capturar screenshot del error
-        if (generateReport) {
-          await this.captureStepScreenshot(stepNumber, false, reportDir);
+        // Capturar screenshot del error (siempre en modo 'always' u 'on-failure')
+        const shouldCaptureError = screenshots.enabled && 
+          (screenshots.mode === 'always' || screenshots.mode === 'on-failure');
+        if (generateReport && shouldCaptureError) {
+          await this.captureStepScreenshot(stepNumber, false, reportDir, screenshots.fullPage);
         }
         
         const stepDuration = Date.now() - stepStartTime;
@@ -1442,13 +1476,22 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       endTime: new Date().toISOString()
     };
 
-    // Generar reportes si están habilitados
-    if (enableTracing) {
+    // Generar tracing si está habilitado
+    // En modo 'on-failure' solo guardamos si hay errores
+    const shouldSaveTrace = shouldTrace && 
+      (traceMode === 'always' || (traceMode === 'on-failure' && !allSuccess));
+    
+    if (shouldSaveTrace) {
       await this.stopTracing(reportDir);
+    } else if (shouldTrace) {
+      // Descartar trace sin guardar
+      try {
+        await this.context?.tracing.stop();
+      } catch {}
     }
     
     if (generateReport) {
-      await this.generateHTMLReport(flowResult, reportDir);
+      await this.generateHTMLReport(flowResult, reportDir, flowName, generateJsonReport);
     }
 
     return flowResult;
@@ -1527,7 +1570,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   /**
    * Captura screenshot de un paso
    */
-  private async captureStepScreenshot(stepNumber: number, success: boolean, reportDir: string): Promise<string> {
+  private async captureStepScreenshot(stepNumber: number, success: boolean, reportDir: string, fullPage: boolean = false): Promise<string> {
     if (!this.page) return '';
     
     const screenshotDir = path.join(reportDir, 'screenshots');
@@ -1538,7 +1581,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     const status = success ? 'passed' : 'failed';
     const screenshotPath = path.join(screenshotDir, `step-${stepNumber}-${status}.png`);
     
-    await this.page.screenshot({ path: screenshotPath, fullPage: false });
+    await this.page.screenshot({ path: screenshotPath, fullPage });
     
     this.stepScreenshots.push({ step: stepNumber, path: screenshotPath, success });
     
@@ -1548,9 +1591,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   /**
    * Genera un reporte HTML con los resultados del flujo
    */
-  async generateHTMLReport(result: FlowResult, reportDir: string): Promise<string> {
+  async generateHTMLReport(result: FlowResult, reportDir: string, flowName?: string, generateJson: boolean = true): Promise<string> {
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
     const reportPath = path.join(reportDir, `report-${timestamp}.html`);
+    
+    // Título del reporte
+    const reportTitle = flowName || 'AI Test Report';
     
     const stepsHtml = result.steps.map((step, index) => {
       const screenshot = this.stepScreenshots.find(s => s.step === step.step);
@@ -1659,7 +1705,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
 <body>
   <div class="container">
     <div class="header">
-      <h1>🤖 Playwright AI Agent - Reporte de Ejecución</h1>
+      <h1>🤖 ${reportTitle}</h1>
       <p>Generado: ${new Date().toLocaleString('es-ES')}</p>
       <p>URL Final: ${result.finalUrl || 'N/A'}</p>
     </div>
@@ -1706,35 +1752,37 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     fs.writeFileSync(reportPath, html);
     console.log(`\n📄 Reporte HTML guardado en: ${reportPath}`);
     
-    // También guardar JSON para integración con webhooks (Slack, etc.)
-    const jsonReport = {
-      timestamp: new Date().toISOString(),
-      success: result.success,
-      totalSteps: result.totalSteps,
-      completedSteps: result.completedSteps,
-      failedSteps: result.totalSteps - result.completedSteps,
-      duration: result.duration,
-      durationFormatted: totalDuration,
-      startTime: result.startTime,
-      endTime: result.endTime,
-      finalUrl: result.finalUrl,
-      steps: result.steps.map(s => ({
-        step: s.step,
-        instruction: s.instruction,
-        success: s.success,
-        error: s.error || null,
-        duration: s.duration,
-        durationFormatted: s.duration ? `${(s.duration / 1000).toFixed(1)}s` : null
-      })),
-      reportHtmlPath: reportPath,
-      tracePath: fs.existsSync(path.join(reportDir, 'trace.zip')) 
-        ? path.join(reportDir, 'trace.zip') 
-        : null
-    };
-    
-    const jsonPath = path.join(reportDir, `report-${timestamp}.json`);
-    fs.writeFileSync(jsonPath, JSON.stringify(jsonReport, null, 2));
-    console.log(`📊 Reporte JSON guardado en: ${jsonPath}`);
+    // Guardar JSON solo si está habilitado
+    if (generateJson) {
+      const jsonReport = {
+        timestamp: new Date().toISOString(),
+        success: result.success,
+        totalSteps: result.totalSteps,
+        completedSteps: result.completedSteps,
+        failedSteps: result.totalSteps - result.completedSteps,
+        duration: result.duration,
+        durationFormatted: totalDuration,
+        startTime: result.startTime,
+        endTime: result.endTime,
+        finalUrl: result.finalUrl,
+        steps: result.steps.map(s => ({
+          step: s.step,
+          instruction: s.instruction,
+          success: s.success,
+          error: s.error || null,
+          duration: s.duration,
+          durationFormatted: s.duration ? `${(s.duration / 1000).toFixed(1)}s` : null
+        })),
+        reportHtmlPath: reportPath,
+        tracePath: fs.existsSync(path.join(reportDir, 'trace.zip')) 
+          ? path.join(reportDir, 'trace.zip') 
+          : null
+      };
+      
+      const jsonPath = path.join(reportDir, `report-${timestamp}.json`);
+      fs.writeFileSync(jsonPath, JSON.stringify(jsonReport, null, 2));
+      console.log(`📊 Reporte JSON guardado en: ${jsonPath}`);
+    }
     
     return reportPath;
   }

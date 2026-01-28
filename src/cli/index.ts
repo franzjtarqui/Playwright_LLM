@@ -13,6 +13,7 @@
  */
 
 import { FlowRunner, RunnerOptions } from '../runner/index.js';
+import { loadConfig } from '../config/index.js';
 
 async function main() {
   const args = process.argv.slice(2);
@@ -143,8 +144,31 @@ function parseRunOptions(args: string[]): RunnerOptions {
   return options;
 }
 
-async function runTests(options: RunnerOptions) {
+async function runTests(cliOptions: RunnerOptions) {
   console.log('\n🤖 AI Test Runner v1.0.0\n');
+  
+  // Cargar configuración desde archivo
+  const config = await loadConfig();
+  console.log('📝 Configuración cargada desde ai-test.config.ts');
+  
+  // Merge: CLI options sobreescriben config file
+  const options: RunnerOptions = {
+    testDir: cliOptions.testDir || config.testDir,
+    reportDir: config.reportDir,
+    baseUrl: cliOptions.baseUrl || config.baseUrl,
+    headless: cliOptions.headless ?? config.browser.headless,
+    slowMo: config.browser.slowMo,
+    failFast: cliOptions.failFast ?? config.execution.failFast,
+    retries: cliOptions.retries ?? config.execution.retries,
+    generateReport: cliOptions.generateReport ?? config.reports.html.enabled,
+    enableTracing: config.reports.trace.enabled,
+    traceMode: config.reports.trace.mode,
+    tags: cliOptions.tags,
+    excludeTags: cliOptions.excludeTags,
+    nameFilter: cliOptions.nameFilter,
+    // Pasar config completo para que el runner pueda usarlo
+    config: config
+  };
   
   if (options.tags) {
     console.log(`🏷️  Tags incluidos: ${options.tags.join(', ')}`);

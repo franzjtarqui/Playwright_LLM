@@ -2,6 +2,8 @@
  * Tipos para el sistema de ejecución de tests
  */
 
+import { AITestConfig } from '../config/types.js';
+
 /**
  * Definición de un flow de test
  */
@@ -83,8 +85,17 @@ export interface RunnerOptions {
   /** Modo headless */
   headless?: boolean;
   
+  /** SlowMo en ms */
+  slowMo?: number;
+  
   /** Reintentos por test fallido */
   retries?: number;
+  
+  /** Modo de trace: 'always' | 'on-failure' | 'never' */
+  traceMode?: 'always' | 'on-failure' | 'never';
+  
+  /** Configuración completa cargada del archivo */
+  config?: AITestConfig;
 }
 
 /**

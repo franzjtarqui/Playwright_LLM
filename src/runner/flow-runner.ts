@@ -108,19 +108,19 @@ export class FlowRunner {
     
     const duration = Date.now() - startTime;
     
-    // Calcular estadísticas
+    // Calcular estadísticas (solo de los tests ejecutados)
     const passed = results.filter(r => r.success).length;
     const failed = results.filter(r => !r.success).length;
-    const skipped = allFlows.length - flowsToRun.length;
+    const filtered = allFlows.length - flowsToRun.length;
     
     // Mostrar resumen
-    this.printSummary({ totalFlows: flowsToRun.length, passed, failed, skipped, duration, flows: results });
+    this.printSummary({ totalFlows: flowsToRun.length, passed, failed, skipped: 0, duration, flows: results }, filtered);
     
     return {
       totalFlows: flowsToRun.length,
       passed,
       failed,
-      skipped,
+      skipped: 0,
       duration,
       flows: results
     };
@@ -223,6 +223,29 @@ export class FlowRunner {
       console.log(`\n❌ ${definition.name} - ERROR`);
       console.log(`   ${errorMessage}`);
       
+      // Generar reporte de error si está habilitado
+      if (this.options.generateReport && this.agent) {
+        try {
+          const errorResult = {
+            success: false,
+            totalSteps: definition.steps.length,
+            completedSteps: 0,
+            steps: [{
+              step: 0,
+              instruction: 'Inicialización / Navegación',
+              success: false,
+              error: errorMessage
+            }],
+            finalUrl: resolvedUrl,
+            error: errorMessage
+          };
+          await this.agent.generateHTMLReport(errorResult as any, this.options.reportDir || './playwright-report');
+          console.log('📄 Reporte de error generado');
+        } catch (reportError) {
+          console.log('⚠️  No se pudo generar reporte de error');
+        }
+      }
+      
       return {
         name: definition.name,
         tags: definition.tags || [],
@@ -239,15 +262,17 @@ export class FlowRunner {
   /**
    * Imprime resumen de la ejecución
    */
-  private printSummary(result: TestRunResult): void {
+  private printSummary(result: TestRunResult, filtered: number = 0): void {
     console.log('\n' + '='.repeat(60));
     console.log('📊 RESUMEN DE EJECUCIÓN');
     console.log('='.repeat(60));
     console.log(`   Total:    ${result.totalFlows} flows`);
     console.log(`   ✅ Passed:  ${result.passed}`);
     console.log(`   ❌ Failed:  ${result.failed}`);
-    console.log(`   ⏭️  Skipped: ${result.skipped}`);
     console.log(`   ⏱️  Tiempo:  ${(result.duration / 1000).toFixed(2)}s`);
+    if (filtered > 0) {
+      console.log(`   🔍 Filtrados: ${filtered} (no coinciden con el filtro)`);
+    }
     console.log('='.repeat(60) + '\n');
     
     // Mostrar flows fallidos

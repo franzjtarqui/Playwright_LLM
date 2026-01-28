@@ -32,6 +32,8 @@ export interface StepResult {
   instruction: string;
   success: boolean;
   error?: string;
+  /** Duración del paso en milisegundos */
+  duration?: number;
 }
 
 /**
@@ -44,6 +46,12 @@ export interface FlowResult {
   steps: StepResult[];
   finalUrl?: string;
   error?: string;
+  /** Duración total del flujo en milisegundos */
+  duration?: number;
+  /** Timestamp de inicio */
+  startTime?: string;
+  /** Timestamp de fin */
+  endTime?: string;
 }
 
 /**
@@ -1284,6 +1292,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     const stepResults: StepResult[] = [];
     let currentUrl = url;
     let completedSteps = 0;
+    const flowStartTime = Date.now();
 
     // Navegar a la URL inicial
     console.log('🌐 Navegando a la URL inicial...');
@@ -1297,6 +1306,8 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       console.log('\n' + '─'.repeat(80));
       console.log(`📌 PASO ${stepNumber}/${steps.length}: ${instruction}`);
       console.log('─'.repeat(80));
+
+      const stepStartTime = Date.now();
 
       try {
         // Analizar con IA según el modo configurado
@@ -1355,14 +1366,16 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           await this.captureStepScreenshot(stepNumber, true, reportDir);
         }
 
+        const stepDuration = Date.now() - stepStartTime;
         stepResults.push({
           step: stepNumber,
           instruction,
-          success: true
+          success: true,
+          duration: stepDuration
         });
         completedSteps++;
 
-        console.log(`\n✅ Paso ${stepNumber} completado!`);
+        console.log(`\n✅ Paso ${stepNumber} completado! (${(stepDuration / 1000).toFixed(1)}s)`);
 
       } catch (error) {
         const errorMessage = (error as Error).message;
@@ -1380,11 +1393,13 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           await this.captureStepScreenshot(stepNumber, false, reportDir);
         }
         
+        const stepDuration = Date.now() - stepStartTime;
         stepResults.push({
           step: stepNumber,
           instruction,
           success: false,
-          error: errorMessage
+          error: errorMessage,
+          duration: stepDuration
         });
 
         if (stopOnError) {
@@ -1398,12 +1413,14 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
 
     // Resumen final
+    const flowDuration = Date.now() - flowStartTime;
     console.log('\n' + '═'.repeat(80));
     console.log('📊 RESUMEN DEL FLUJO');
     console.log('═'.repeat(80));
     console.log(`\n   Total de pasos: ${steps.length}`);
     console.log(`   Completados: ${completedSteps}`);
     console.log(`   Fallidos: ${steps.length - completedSteps}`);
+    console.log(`   Tiempo total: ${(flowDuration / 1000).toFixed(1)}s`);
     console.log(`   URL final: ${currentUrl}`);
     
     const allSuccess = completedSteps === steps.length;
@@ -1419,7 +1436,10 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       totalSteps: steps.length,
       completedSteps,
       steps: stepResults,
-      finalUrl: currentUrl
+      finalUrl: currentUrl,
+      duration: flowDuration,
+      startTime: new Date(flowStartTime).toISOString(),
+      endTime: new Date().toISOString()
     };
 
     // Generar reportes si están habilitados
@@ -1542,11 +1562,15 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         const base64Image = imageBuffer.toString('base64');
         screenshotImg = `<img src="data:image/png;base64,${base64Image}" alt="Step ${step.step}" style="max-width: 100%; border: 1px solid #ddd; border-radius: 4px; margin-top: 10px;">`;
       }
+
+      // Formatear duración del paso
+      const stepDuration = step.duration ? `${(step.duration / 1000).toFixed(1)}s` : 'N/A';
       
       return `
         <div class="step ${step.success ? 'passed' : 'failed'}">
           <div class="step-header">
             <span class="step-number">Paso ${step.step}</span>
+            <span class="step-time">⏱️ ${stepDuration}</span>
             <span class="step-status ${step.success ? 'passed' : 'failed'}">
               ${step.success ? '✅ Completado' : '❌ Fallido'}
             </span>
@@ -1557,6 +1581,9 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         </div>
       `;
     }).join('');
+
+    // Formatear duración total
+    const totalDuration = result.duration ? `${(result.duration / 1000).toFixed(1)}s` : 'N/A';
 
     const html = `
 <!DOCTYPE html>
@@ -1600,6 +1627,7 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     .summary-card .value.success { color: #22c55e; }
     .summary-card .value.error { color: #ef4444; }
     .summary-card .value.total { color: #3b82f6; }
+    .summary-card .value.time { color: #8b5cf6; }
     .steps-container { background: white; border-radius: 10px; padding: 20px; }
     .step { 
       border: 1px solid #e5e7eb; 
@@ -1609,8 +1637,9 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
     .step.passed { border-left: 4px solid #22c55e; }
     .step.failed { border-left: 4px solid #ef4444; background: #fef2f2; }
-    .step-header { display: flex; justify-content: space-between; margin-bottom: 10px; }
+    .step-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; gap: 10px; }
     .step-number { font-weight: bold; color: #374151; }
+    .step-time { color: #8b5cf6; font-size: 14px; font-weight: 500; }
     .step-status.passed { color: #22c55e; }
     .step-status.failed { color: #ef4444; }
     .step-instruction { color: #4b5563; margin-bottom: 10px; }
@@ -1649,6 +1678,10 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         <div class="value error">${result.totalSteps - result.completedSteps}</div>
       </div>
       <div class="summary-card">
+        <h3>Tiempo Total</h3>
+        <div class="value time">${totalDuration}</div>
+      </div>
+      <div class="summary-card">
         <h3>Estado</h3>
         <div class="value ${result.success ? 'success' : 'error'}">
           ${result.success ? '✅ Éxito' : '❌ Fallido'}
@@ -1680,12 +1713,18 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
       totalSteps: result.totalSteps,
       completedSteps: result.completedSteps,
       failedSteps: result.totalSteps - result.completedSteps,
+      duration: result.duration,
+      durationFormatted: totalDuration,
+      startTime: result.startTime,
+      endTime: result.endTime,
       finalUrl: result.finalUrl,
       steps: result.steps.map(s => ({
         step: s.step,
         instruction: s.instruction,
         success: s.success,
-        error: s.error || null
+        error: s.error || null,
+        duration: s.duration,
+        durationFormatted: s.duration ? `${(s.duration / 1000).toFixed(1)}s` : null
       })),
       reportHtmlPath: reportPath,
       tracePath: fs.existsSync(path.join(reportDir, 'trace.zip')) 

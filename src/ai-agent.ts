@@ -188,8 +188,11 @@ export class PlaywrightAIAgent {
 
   /**
    * Inicializa el navegador y el proveedor de LLM
+   * @param options - Opciones de inicialización (headless, slowMo)
    */
-  async initialize(): Promise<void> {
+  async initialize(options: { headless?: boolean; slowMo?: number } = {}): Promise<void> {
+    const { headless = false, slowMo = 500 } = options;
+    
     // Inicializar proveedor de LLM (auto-detecta según .env)
     this.llmProvider = createLLMProvider();
     await this.llmProvider.initialize();
@@ -198,8 +201,8 @@ export class PlaywrightAIAgent {
     
     // Inicializar navegador
     this.browser = await chromium.launch({ 
-      headless: false, // Ver lo que hace el agente
-      slowMo: 500 // Ralentizar para observar
+      headless,
+      slowMo
     });
     
     // Crear contexto (necesario para tracing)

@@ -1,15 +1,26 @@
 {
   "name": "playwright-ai-agent",
   "version": "1.0.0",
-  "description": "Demo de Playwright con Agente IA para automatización sin selectores - Soporta múltiples LLMs",
-  "main": "dist/demo.js",
+  "description": "Framework de automatización con IA - Tests en lenguaje natural",
+  "main": "dist/runner/index.js",
   "type": "module",
+  "bin": {
+    "ai-test": "./dist/cli/index.js"
+  },
   "scripts": {
     "build": "tsc",
-    "demo": "tsc && node dist/demo.js",
-    "dev": "tsx src/demo.ts",
-    "install-browsers": "playwright install chromium",
-    "serve-demo": "node src/demo-server.js"
+    
+    "test": "tsc && node dist/tests/run.js",
+    "test:smoke": "tsc && node dist/tests/run.js --tag smoke",
+    "test:login": "tsc && node dist/tests/run.js --tag login",
+    "test:operadores": "tsc && node dist/tests/run.js --tag operadores",
+    "test:piloto": "tsc && node dist/tests/run.js --tag piloto",
+    "test:e2e": "tsc && node dist/tests/run.js --tag e2e",
+    "test:exclude-slow": "tsc && node dist/tests/run.js --exclude slow",
+    
+    "ai-test": "tsc && node dist/cli/index.js",
+    
+    "install-browsers": "playwright install chromium"
   },
   "keywords": ["playwright", "ai", "automation", "llm", "gemini", "openai", "claude", "typescript"],
   "author": "",

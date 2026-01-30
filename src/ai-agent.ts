@@ -142,6 +142,8 @@ export interface InteractiveElement {
   role?: string;
   visible?: boolean;
   label?: string;
+  dataTestId?: string;
+  className?: string;
 }
 
 /**
@@ -524,9 +526,30 @@ export class PlaywrightAIAgent {
                      element.tagName === 'INPUT' ? 'textbox' : 
                      element.tagName === 'SELECT' ? 'combobox' : '');
         
-        // Detectar si el ID es dinámico de React (patrón :r\d+:)
+        // Detectar si el ID es dinámico de React/MUI
+        // Patrones dinámicos a excluir:
+        // - :r123: (React useId)
+        // - :abc: (cualquier cosa entre colons)
+        // - mui-123 (MUI auto-generated con SOLO números)
+        // Patrones a MANTENER:
+        // - mui-component-select-xxx (IDs semánticos de MUI)
+        // - cualquier ID descriptivo
         const elementId = element.id || undefined;
-        const isDynamicId = elementId && (/^:r\d+:$/i.test(elementId) || /^:.*:$/.test(elementId) || /^mui-\d+$/.test(elementId));
+        const isDynamicId = elementId && (
+          /^:r\d+:$/i.test(elementId) || 
+          /^:.*:$/.test(elementId) || 
+          /^mui-\d+$/.test(elementId)  // Solo excluir mui-NUMERO (ej: mui-123)
+        );
+        
+        // Extraer clases relevantes (MUI, Bootstrap, etc) - solo las útiles para identificar
+        const classList = Array.from(element.classList);
+        const relevantClasses = classList.filter(c => 
+          c.startsWith('Mui') || 
+          c.startsWith('btn-') || 
+          c.includes('select') ||
+          c.includes('dropdown') ||
+          c.includes('input')
+        ).slice(0, 3).join(' ') || undefined;
         
         results.push({
           tag: element.tagName.toLowerCase(),
@@ -540,7 +563,9 @@ export class PlaywrightAIAgent {
           href: element.getAttribute('href') || undefined,
           role: role || undefined,
           visible: true,
-          label: accessibleName || undefined // Label asociado (para formularios)
+          label: accessibleName || undefined, // Label asociado (para formularios)
+          dataTestId: element.getAttribute('data-testid') || element.getAttribute('data-test-id') || undefined,
+          className: relevantClasses
         });
       }
       
@@ -572,6 +597,8 @@ export class PlaywrightAIAgent {
       // Priorizar atributos estables sobre IDs dinámicos
       if (el.name) parts.push(`name="${el.name}"`);
       if (el.placeholder) parts.push(`placeholder="${el.placeholder}"`);
+      // data-testid es el más confiable para testing
+      if (el.dataTestId) parts.push(`data-testid="${el.dataTestId}"`);
       // Mostrar label para campos de formulario (más útil que ID para la IA)
       if (el.label && (el.tag === 'input' || el.tag === 'select' || el.tag === 'textarea')) {
         parts.push(`label="${el.label}"`);
@@ -580,6 +607,8 @@ export class PlaywrightAIAgent {
       if (el.role) parts.push(`role="${el.role}"`);
       // Solo incluir ID si existe y NO es dinámico (ya filtrado antes)
       if (el.id) parts.push(`id="${el.id}"`);
+      // Clases relevantes de MUI/frameworks para identificar tipo de componente
+      if (el.className) parts.push(`class="${el.className}"`);
       if (el.text && el.tag !== 'input') parts.push(`texto="${el.text}"`);
       if (el.href) parts.push(`href="${el.href.substring(0, 50)}..."`);
       

@@ -27,7 +27,7 @@ const config: AITestConfig = {
   
   browser: {
     /** Ejecutar sin interfaz gráfica (útil para CI/CD) */
-    headless: true,
+    headless: false,
     
     /** Ralentizar acciones en ms (útil para debugging) */
     slowMo: 500,
@@ -70,7 +70,7 @@ const config: AITestConfig = {
     
     /** Generar Playwright Trace (archivo .zip para debug) */
     trace: {
-      enabled: true,
+      enabled: false,
       /** 
        * Cuándo generar trace:
        * - 'always': Siempre
@@ -181,7 +181,7 @@ const config: AITestConfig = {
     parallel: false,
     
     /** Número máximo de workers en paralelo */
-    maxWorkers: 3
+    maxWorkers: 4
   },
   
   // ═══════════════════════════════════════════════════════════════════════════

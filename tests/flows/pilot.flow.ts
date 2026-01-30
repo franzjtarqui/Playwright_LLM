@@ -18,14 +18,14 @@ export default defineFlow({
   delayBetweenSteps: 4000,
   
   steps: [
-    'Ingresar correo ${TEST_EMAIL} y contraseña ${TEST_PASSWORD}, hacer click en Ingresar',    
-    'Ir a Mi flota y luego a Operadores',    
-    'En configuración de Operadores, hacer click en "Crear nuevo"',    
-    `Llenar el formulario con:
-     - Nombre(s): \${OPERADOR_NOMBRE}
-     - Apellido(s): \${OPERADOR_APELLIDO}
-     - Fecha de nacimiento: \${OPERADOR_FECHA}
-     - Apto para operar: seleccionar "Solo full"
-     - Nro. de licencia de conducir: \${OPERADOR_LICENCIA}`,
-  ]
+  'Llenar campo email con ${TEST_EMAIL}, campo contraseña con ${TEST_PASSWORD}, y hacer click en botón Ingresar',
+  'Click en menú "Mi flota", luego en "Operadores"',
+  'Click en botón "Crear nuevo"',
+  `Completar formulario de operador:
+   - Campo "Nombre(s)": \${OPERADOR_NOMBRE}
+   - Campo "Apellido(s)": \${OPERADOR_APELLIDO}
+   - Campo "Fecha de nacimiento": \${OPERADOR_FECHA}
+   - Campo "Nro. de licencia de conducir": \${OPERADOR_LICENCIA}
+   - Dropdown "Apto para operar": seleccionar "Solo full"`,
+]
 });

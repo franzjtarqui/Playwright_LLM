@@ -1,5 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
+import { globalFileLock } from './utils/locks.js';
 
 /**
  * Acción cacheada individual
@@ -409,22 +410,28 @@ export class SelectorCacheManager {
   }
 
   /**
-   * Guarda el caché a disco
+   * Guarda el caché a disco (thread-safe)
    */
   private saveToDisk(): void {
-    try {
-      const filePath = path.resolve(this.config.cacheFilePath);
-      const data: CacheFileData = {
-        version: this.config.appVersion,
-        createdAt: Date.now(),
-        lastModified: Date.now(),
-        entries: this.cache,
-      };
-      
-      fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-    } catch (error) {
-      this.log(`⚠️ Error guardando caché: ${(error as Error).message}`);
-    }
+    const filePath = path.resolve(this.config.cacheFilePath);
+    
+    // Usar lock para escritura thread-safe
+    globalFileLock.withLock(filePath, async () => {
+      try {
+        const data: CacheFileData = {
+          version: this.config.appVersion,
+          createdAt: Date.now(),
+          lastModified: Date.now(),
+          entries: this.cache,
+        };
+        
+        fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
+      } catch (error) {
+        this.log(`⚠️ Error guardando caché: ${(error as Error).message}`);
+      }
+    }).catch(err => {
+      this.log(`⚠️ Error en lock de caché: ${err.message}`);
+    });
   }
 
   /**

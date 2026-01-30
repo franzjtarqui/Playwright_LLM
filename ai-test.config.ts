@@ -27,7 +27,7 @@ const config: AITestConfig = {
   
   browser: {
     /** Ejecutar sin interfaz gráfica (útil para CI/CD) */
-    headless: false,
+    headless: true,
     
     /** Ralentizar acciones en ms (útil para debugging) */
     slowMo: 500,
@@ -70,7 +70,7 @@ const config: AITestConfig = {
     
     /** Generar Playwright Trace (archivo .zip para debug) */
     trace: {
-      enabled: false,
+      enabled: true,
       /** 
        * Cuándo generar trace:
        * - 'always': Siempre
@@ -95,7 +95,7 @@ const config: AITestConfig = {
      * - 'on-failure': Solo cuando falla un paso
      * - 'never': Nunca
      */
-    mode: 'failure' as 'always' | 'on-failure' | 'never',
+    mode: 'on-failure' as 'always' | 'on-failure' | 'never',
     
     /** Capturar página completa (scroll) o solo viewport */
     fullPage: false,
@@ -133,7 +133,7 @@ const config: AITestConfig = {
     retryOnCacheFailure: true,
     
     /** Máximo de reintentos por paso */
-    maxRetries: 2
+    maxRetries: 1
   },
   
   // ═══════════════════════════════════════════════════════════════════════════
@@ -181,7 +181,7 @@ const config: AITestConfig = {
     parallel: false,
     
     /** Número máximo de workers en paralelo */
-    maxWorkers: 2
+    maxWorkers: 3
   },
   
   // ═══════════════════════════════════════════════════════════════════════════

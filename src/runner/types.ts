@@ -121,6 +121,8 @@ export interface StepExecutionResult {
   success: boolean;
   duration: number;
   error?: string;
+  /** Screenshot en base64 (si está habilitado) */
+  screenshot?: string;
 }
 
 /**

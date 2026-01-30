@@ -34,6 +34,8 @@ export interface StepResult {
   error?: string;
   /** Duración del paso en milisegundos */
   duration?: number;
+  /** Screenshot en base64 (si está habilitado) */
+  screenshot?: string;
 }
 
 /**
@@ -1394,8 +1396,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         // Capturar screenshot del paso completado (según configuración)
         const shouldCaptureSuccess = screenshots.enabled && 
           (screenshots.mode === 'always');
-        if (generateReport && shouldCaptureSuccess) {
-          await this.captureStepScreenshot(stepNumber, true, reportDir, screenshots.fullPage);
+        let stepScreenshot: string | undefined;
+        if (shouldCaptureSuccess) {
+          const capture = await this.captureStepScreenshot(stepNumber, true, reportDir, screenshots.fullPage);
+          if (capture && screenshots.embedInHtml) {
+            stepScreenshot = capture.base64;
+          }
         }
 
         const stepDuration = Date.now() - stepStartTime;
@@ -1403,7 +1409,8 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           step: stepNumber,
           instruction,
           success: true,
-          duration: stepDuration
+          duration: stepDuration,
+          screenshot: stepScreenshot
         });
         completedSteps++;
 
@@ -1423,8 +1430,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
         // Capturar screenshot del error (siempre en modo 'always' u 'on-failure')
         const shouldCaptureError = screenshots.enabled && 
           (screenshots.mode === 'always' || screenshots.mode === 'on-failure');
-        if (generateReport && shouldCaptureError) {
-          await this.captureStepScreenshot(stepNumber, false, reportDir, screenshots.fullPage);
+        let errorScreenshot: string | undefined;
+        if (shouldCaptureError) {
+          const capture = await this.captureStepScreenshot(stepNumber, false, reportDir, screenshots.fullPage);
+          if (capture && screenshots.embedInHtml) {
+            errorScreenshot = capture.base64;
+          }
         }
         
         const stepDuration = Date.now() - stepStartTime;
@@ -1433,7 +1444,8 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
           instruction,
           success: false,
           error: errorMessage,
-          duration: stepDuration
+          duration: stepDuration,
+          screenshot: errorScreenshot
         });
 
         if (stopOnError) {
@@ -1568,10 +1580,10 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
   }
 
   /**
-   * Captura screenshot de un paso
+   * Captura screenshot de un paso y devuelve base64
    */
-  private async captureStepScreenshot(stepNumber: number, success: boolean, reportDir: string, fullPage: boolean = false): Promise<string> {
-    if (!this.page) return '';
+  private async captureStepScreenshot(stepNumber: number, success: boolean, reportDir: string, fullPage: boolean = false): Promise<{ path: string; base64: string }> {
+    if (!this.page) return { path: '', base64: '' };
     
     const screenshotDir = path.join(reportDir, 'screenshots');
     if (!fs.existsSync(screenshotDir)) {
@@ -1581,11 +1593,13 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     const status = success ? 'passed' : 'failed';
     const screenshotPath = path.join(screenshotDir, `step-${stepNumber}-${status}.png`);
     
-    await this.page.screenshot({ path: screenshotPath, fullPage });
+    // Capturar screenshot como buffer para obtener base64
+    const buffer = await this.page.screenshot({ path: screenshotPath, fullPage });
+    const base64 = buffer.toString('base64');
     
     this.stepScreenshots.push({ step: stepNumber, path: screenshotPath, success });
     
-    return screenshotPath;
+    return { path: screenshotPath, base64 };
   }
 
   /**

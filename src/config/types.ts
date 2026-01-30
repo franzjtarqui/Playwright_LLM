@@ -159,7 +159,7 @@ export const defaultConfig: AITestConfig = {
     retries: 0,
     flowTimeout: 120000,
     parallel: false,
-    maxWorkers: 2
+    maxWorkers: 5
   },
   
   notifications: {

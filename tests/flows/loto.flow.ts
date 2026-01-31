@@ -14,7 +14,7 @@ export default defineFlow({
   delayBetweenSteps: 4000,
   
   steps: [
-    'Ingresar correo ${TEST_EMAIL} y contraseña ${TEST_PASSWORD}, hacer click en Ingresar',    
-    'Ir a Gestión y luego a Órdenes de carga',
+    'Llenar campo email con ${TEST_EMAIL}, campo contraseña con ${TEST_PASSWORD}, y hacer click en botón Ingresar',
+    'Click en menú "Gestión", luego en "Órdenes de carga"',
   ]
 });

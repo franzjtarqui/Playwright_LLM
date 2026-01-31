@@ -689,6 +689,13 @@ ACTION TYPES:
 - verify: Verify that text exists on the page (use locator with text to search)
 
 LOCATOR RULES:
+⚠️ CRITICAL RULE - EXACT MATCH:
+   - If the instruction contains "texto exacto", "exacto", "exact", or "exactly" → You MUST use "exact 'value'" NOT "text 'value'"
+   - "exact 'value'" = STRICT match (fails if text is different)
+   - "text 'value'" = PARTIAL match (finds substrings)
+   - Example: User says "texto exacto 'Mi flota'" → Use "exact 'Mi flota'" 
+   - WRONG: "text 'Mi flota'" ❌  CORRECT: "exact 'Mi flota'" ✅
+
 1. For email fields: use "name='email'" or "placeholder='email'"
 2. For password fields: use "type='password'" or "name='password'" 
 3. For buttons/links/menu items: use visible text like "text 'Login'" or "text 'Settings'"
@@ -720,6 +727,25 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     }
   ],
   "reasoning": "Generated all 3 actions: verify title, click Settings, click Users as requested",
+  "needsVerification": true
+}
+
+EXAMPLE - Exact text match (when user says "texto exacto" or "exact"):
+Instruction: "Click on menu item with exact text 'Mi flota', then submenu with exact text 'Operadores'"
+{
+  "actions": [
+    {
+      "type": "click",
+      "description": "Click on Mi flota menu (exact match)",
+      "locator": "exact 'Mi flota'"
+    },
+    {
+      "type": "click",
+      "description": "Click on Operadores submenu (exact match)",
+      "locator": "exact 'Operadores'"
+    }
+  ],
+  "reasoning": "User requested exact text matching, so using 'exact' prefix to ensure precise match",
   "needsVerification": true
 }`;
   }
@@ -869,8 +895,48 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
     const typeMatch = description.match(/type[=:]?\s*['"]?([^'">\s]+)/i);
     const textMatch = description.match(/texto?\s*['"]?([^'"]+)/i) || description.match(/['"]([^'"]+)['"]/);
     
+    // 🎯 Detectar si se requiere match EXACTO
+    // Sintaxis: exact 'texto', exacto 'texto', "texto" exacto
+    const exactMatch = description.match(/(?:exact|exacto)\s*[=:]?\s*['"]([^'"]+)['"]/i) ||
+                       description.match(/['"]([^'"]+)['"]\s*(?:exact|exacto)/i);
+    const requireExact = exactMatch !== null;
+    
+    if (requireExact) {
+      console.log(`  🎯 Modo EXACTO activado para: "${exactMatch![1]}"`);
+    }
+    
     // Estrategias de búsqueda ordenadas por especificidad
     const strategies: Array<() => Promise<Locator | null>> = [
+      
+      // 0. MATCH EXACTO (si se especificó)
+      async () => {
+        if (requireExact && exactMatch) {
+          const exactText = exactMatch[1].trim();
+          console.log(`  🔎 Buscando texto EXACTO: "${exactText}"`);
+          
+          // Buscar con exact: true (debe coincidir exactamente)
+          const loc = page.getByText(exactText, { exact: true }).first();
+          if (await loc.count() > 0) {
+            console.log(`  ✅ Match exacto encontrado`);
+            return loc;
+          }
+          
+          // También buscar en roles específicos
+          const roleLoc = page.getByRole('menuitem', { name: exactText, exact: true })
+            .or(page.getByRole('link', { name: exactText, exact: true }))
+            .or(page.getByRole('button', { name: exactText, exact: true }))
+            .first();
+          if (await roleLoc.count() > 0) {
+            console.log(`  ✅ Match exacto encontrado (por rol)`);
+            return roleLoc;
+          }
+          
+          // Si requiere exacto y no lo encuentra, FALLAR (no buscar parcial)
+          console.log(`  ❌ No se encontró match exacto para: "${exactText}"`);
+          throw new Error(`Match exacto requerido pero no encontrado: "${exactText}"`);
+        }
+        return null;
+      },
       
       // 1. Si es un selector CSS directo, probarlo
       async () => {
@@ -1073,8 +1139,12 @@ Instruction: "Verify title 'Dashboard', click on 'Settings', then click on 'User
               continue;
             }
           }
-        } catch {
-          // Continuar con la siguiente estrategia
+        } catch (error) {
+          // Si es un error de match exacto requerido, propagarlo (no continuar con otras estrategias)
+          if (error instanceof Error && error.message.includes('Match exacto requerido')) {
+            throw error;
+          }
+          // Otros errores: continuar con la siguiente estrategia
           continue;
         }
       }

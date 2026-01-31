@@ -19,7 +19,7 @@ export default defineFlow({
   
   steps: [
   'Llenar campo email con ${TEST_EMAIL}, campo contraseña con ${TEST_PASSWORD}, y hacer click en botón Ingresar',
-  'Click en menú "Mi flota", luego en "Operadores"',
+  'Hacer click en el elemento de menú que tenga el texto exacto "Mi flota" y después en el submenú con texto exacto "Operadores"',
   'Click en botón "Crear nuevo"',
   `Completar formulario de operador:
    - Campo "Nombre(s)": \${OPERADOR_NOMBRE}

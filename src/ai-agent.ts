@@ -1,5 +1,5 @@
 import { chromium, Browser, Page, Locator, BrowserContext } from '@playwright/test';
-import { createLLMProvider, LLMProvider, AIDecision, AIAction } from './llm-providers.js';
+import { createLLMProvider, LLMProvider, AIDecision, AIAction, VerifyItem, MenuOption } from './llm-providers.js';
 import { SelectorCacheManager, SelectorCacheConfig, CachedSelector, CachedAction } from './selector-cache.js';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -687,6 +687,37 @@ ACTION TYPES:
 - press: Press a key (Enter, Tab, etc)
 - wait: Wait for specific time in milliseconds
 - verify: Verify that text exists on the page (use locator with text to search)
+- verifyAll: Verify multiple elements including menus (see VERIFY_ALL FORMAT below)
+
+VERIFY_ALL FORMAT (for "Verificar pantalla" or "verifyAll" instructions):
+Use this when the user wants to verify multiple elements of a screen, including dropdown menus.
+{
+  "type": "verifyAll",
+  "description": "Verify screen elements",
+  "locator": "screen",
+  "verifications": [
+    { "type": "element", "target": "Título texto", "exact": true },
+    { "type": "element", "target": "Crear nuevo" },
+    { 
+      "type": "menu", 
+      "target": "...", 
+      "options": [
+        { "text": "Descargar", "state": "enabled" },
+        { "text": "Editar", "state": "enabled" },
+        { "text": "Solicitar habilitación", "state": "disabled" }
+      ]
+    },
+    {
+      "type": "sidebar",
+      "target": "Mi flota",
+      "options": [
+        { "text": "Operadores", "state": "any" },
+        { "text": "Camiones", "state": "any" }
+      ]
+    }
+  ]
+}
+States: "enabled" = must be clickable, "disabled" = must be grayed out/not clickable, "any" = just check it exists
 
 LOCATOR RULES:
 ⚠️ CRITICAL RULE - EXACT MATCH:
@@ -1246,12 +1277,418 @@ Instruction: "Click on menu item with exact text 'Mi flota', then submenu with e
           break;
         }
 
+        case 'verifyAll': {
+          // Verificar múltiples elementos de una pantalla
+          await this.executeVerifyAll(action.verifications || []);
+          break;
+        }
+
         default:
           console.warn(`   ⚠️  Tipo de acción desconocida: ${action.type}`);
       }
     } catch (error) {
       console.error(`   ❌ Error ejecutando acción: ${(error as Error).message}`);
       throw error;
+    }
+  }
+
+  /**
+   * Ejecuta verificación de múltiples elementos (verifyAll)
+   * Soporta: elementos normales, menús desplegables, sidebar, estados habilitado/deshabilitado
+   */
+  private async executeVerifyAll(verifications: VerifyItem[]): Promise<void> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    console.log(`\n  📋 Verificando ${verifications.length} elementos...`);
+    
+    const results: { item: string; success: boolean; error?: string }[] = [];
+    
+    for (const item of verifications) {
+      try {
+        switch (item.type) {
+          case 'element': {
+            // Verificar elemento simple (texto, botón, etc.)
+            await this.verifyElement(item.target, item.exact);
+            results.push({ item: item.target, success: true });
+            break;
+          }
+          
+          case 'menu': {
+            // Verificar menú desplegable (abrir, verificar opciones, cerrar)
+            await this.verifyMenu(item.target, item.options || []);
+            results.push({ item: `Menú "${item.target}"`, success: true });
+            break;
+          }
+          
+          case 'sidebar': {
+            // Verificar menú de sidebar (expandir, verificar submenús)
+            await this.verifySidebar(item.target, item.options || []);
+            results.push({ item: `Sidebar "${item.target}"`, success: true });
+            break;
+          }
+          
+          default:
+            console.warn(`     ⚠️ Tipo de verificación desconocida: ${item.type}`);
+        }
+      } catch (error) {
+        const errorMsg = (error as Error).message;
+        results.push({ item: item.target, success: false, error: errorMsg });
+        console.error(`     ❌ ${item.target}: ${errorMsg}`);
+      }
+    }
+    
+    // Resumen de verificaciones
+    const passed = results.filter(r => r.success).length;
+    const failed = results.filter(r => !r.success).length;
+    
+    console.log(`\n  📊 Resultado: ${passed}/${results.length} verificaciones pasaron`);
+    
+    if (failed > 0) {
+      const failedItems = results.filter(r => !r.success).map(r => `"${r.item}"`).join(', ');
+      throw new Error(`Verificaciones fallidas: ${failedItems}`);
+    }
+    
+    console.log(`   ✅ Todas las verificaciones pasaron`);
+  }
+
+  /**
+   * Verifica que un elemento existe en la página
+   */
+  private async verifyElement(target: string, exact?: boolean): Promise<void> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    // Detectar y extraer patrones de texto con prefijos
+    // Patrón: exact 'texto' o exact "texto"
+    const exactMatch = target.match(/^exact\s+['"]([^'"]+)['"]/i);
+    if (exactMatch) {
+      target = exactMatch[1];
+      exact = true;
+    }
+    
+    // Patrón: text 'texto' o text "texto"
+    const textMatch = target.match(/^text\s+['"]([^'"]+)['"]/i);
+    if (textMatch) {
+      target = textMatch[1];
+      // exact sigue siendo el valor que tenía (false por defecto)
+    }
+    
+    console.log(`     🔍 Elemento: "${target}" ${exact ? '(exacto)' : ''}`);
+    
+    // Detectar si el target es un placeholder explícito (ej: "placeholder 'texto'")
+    const placeholderMatch = target.match(/^placeholder\s*[=:]?\s*['"]([^'"]+)['"]/i);
+    if (placeholderMatch) {
+      const placeholderText = placeholderMatch[1];
+      console.log(`     🔍 Buscando placeholder: "${placeholderText}"`);
+      const placeholderLocator = this.page.getByPlaceholder(placeholderText);
+      if (await placeholderLocator.count() > 0) {
+        console.log(`     ✅ Placeholder "${placeholderText}" encontrado`);
+        return;
+      }
+      // Buscar parcial
+      const partialLocator = this.page.locator(`[placeholder*="${placeholderText.substring(0, 20)}"]`);
+      if (await partialLocator.count() > 0) {
+        console.log(`     ✅ Placeholder "${placeholderText}" encontrado (parcial)`);
+        return;
+      }
+      throw new Error(`Placeholder no encontrado: "${placeholderText}"`);
+    }
+    
+    // Estrategias de búsqueda en orden de prioridad
+    const strategies = [
+      // 1. Texto visible
+      async () => {
+        const locator = exact 
+          ? this.page!.getByText(target, { exact: true })
+          : this.page!.getByText(target);
+        if (await locator.first().isVisible().catch(() => false)) {
+          return true;
+        }
+        return false;
+      },
+      // 2. Placeholder (para inputs de búsqueda)
+      async () => {
+        const placeholderLocator = this.page!.getByPlaceholder(target);
+        if (await placeholderLocator.count() > 0) {
+          console.log(`     ✅ "${target}" encontrado (placeholder)`);
+          return true;
+        }
+        // También buscar placeholder parcial
+        const partialPlaceholder = this.page!.locator(`[placeholder*="${target.substring(0, 20)}"]`);
+        if (await partialPlaceholder.count() > 0) {
+          console.log(`     ✅ "${target}" encontrado (placeholder parcial)`);
+          return true;
+        }
+        return false;
+      },
+      // 3. Botones y links
+      async () => {
+        const altLocator = this.page!.locator(`button:has-text("${target}"), a:has-text("${target}"), [aria-label*="${target}"]`);
+        if (await altLocator.count() > 0) {
+          console.log(`     ✅ "${target}" encontrado (alternativo)`);
+          return true;
+        }
+        return false;
+      },
+      // 4. Encabezados de tabla
+      async () => {
+        const thLocator = this.page!.locator(`th:has-text("${target}"), [role="columnheader"]:has-text("${target}")`);
+        if (await thLocator.count() > 0) {
+          console.log(`     ✅ "${target}" encontrado (encabezado tabla)`);
+          return true;
+        }
+        return false;
+      },
+    ];
+    
+    for (const strategy of strategies) {
+      if (await strategy()) {
+        console.log(`     ✅ "${target}" encontrado`);
+        return;
+      }
+    }
+    
+    throw new Error(`Elemento no encontrado: "${target}"`);
+  }
+
+  /**
+   * Verifica un menú desplegable (abre, verifica opciones, cierra)
+   */
+  private async verifyMenu(menuTrigger: string, options: MenuOption[]): Promise<void> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    console.log(`     📂 Menú: "${menuTrigger}"`);
+    
+    // 1. Encontrar y hacer click en el trigger del menú
+    const trigger = await this.findMenuTrigger(menuTrigger);
+    await trigger.click();
+    console.log(`        Click en trigger del menú`);
+    
+    // 2. Esperar a que el menú MUI se abra (portal/popup)
+    try {
+      // MUI Menu usa role="menu" o role="listbox" en el popup
+      await this.page.waitForSelector('[role="menu"], [role="listbox"], .MuiMenu-paper, .MuiPopover-paper', { 
+        state: 'visible', 
+        timeout: 3000 
+      });
+      console.log(`        Menú abierto`);
+    } catch {
+      // Fallback: esperar un poco más
+      await this.page.waitForTimeout(800);
+      console.log(`        Esperando menú...`);
+    }
+    
+    // 3. Verificar cada opción
+    for (const option of options) {
+      await this.verifyMenuOption(option);
+    }
+    
+    // 4. Cerrar el menú (Escape)
+    await this.page.keyboard.press('Escape');
+    await this.page.waitForTimeout(300);
+    console.log(`        Menú cerrado`);
+  }
+
+  /**
+   * Encuentra el trigger de un menú (botón "...", icono, etc.)
+   */
+  private async findMenuTrigger(trigger: string): Promise<Locator> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    // Detectar si es un menú de tabla (primer registro, primera fila, etc.)
+    const isTableRowMenu = /primer|first|fila|row|registro/i.test(trigger);
+    
+    // Intentar diferentes formas de encontrar el trigger
+    const strategies = [
+      // Botón de acciones en DataGrid (primer registro de tabla)
+      ...(isTableRowMenu ? [
+        // MUI DataGrid: celda de acciones con IconButton
+        () => this.page!.locator('[role="row"]').first().locator('[data-field="actions"] button, .MuiDataGrid-cell--withRenderer button.MuiIconButton-root'),
+        // Primer botón MoreVert en una fila de tabla
+        () => this.page!.locator('[role="row"]').first().locator('button').filter({ has: this.page!.locator('svg[data-testid*="MoreVert"]') }),
+        // Primera fila con botón de menú
+        () => this.page!.locator('tr, [role="row"]').first().locator('button.MuiIconButton-root'),
+      ] : []),
+      // Botón con texto exacto
+      () => this.page!.getByRole('button', { name: trigger }),
+      // Botón con aria-label (común para iconos de menú)
+      () => this.page!.locator(`[aria-label="${trigger}"], [aria-label*="${trigger}"], [aria-label*="more"], [aria-label*="menu"], [aria-label*="opciones"]`),
+      // Icono de menú MUI (MoreVert, MoreHoriz) - muy común en Material-UI
+      () => this.page!.locator('[data-testid="MoreVertIcon"], [data-testid="MoreHorizIcon"], [data-testid*="MoreVert"]').locator('xpath=ancestor::button[1]'),
+      // Botones con iconos de tres puntos (SVG dentro de botón)
+      () => this.page!.locator('button').filter({ has: this.page!.locator('svg[data-testid*="More"]') }),
+      // Icono de menú (tres puntos como texto)
+      () => this.page!.locator('button:has-text("..."), button:has-text("⋮"), button:has-text("⋯")'),
+      // Botón con clases de menú
+      () => this.page!.locator('[data-testid*="menu"], [class*="menu-trigger"], [class*="MenuButton"], [class*="more-button"]'),
+      // Botón IconButton de MUI (común para acciones de menú)
+      () => this.page!.locator('button.MuiIconButton-root').filter({ has: this.page!.locator('svg') }),
+      // Cualquier elemento clickeable con ese texto
+      () => this.page!.locator(`button, [role="button"]`).filter({ hasText: trigger }),
+    ];
+    
+    for (const strategy of strategies) {
+      try {
+        const locator = strategy().first();
+        if (await locator.count() > 0 && await locator.isVisible()) {
+          return locator;
+        }
+      } catch {
+        // Continuar con siguiente estrategia
+      }
+    }
+    
+    throw new Error(`No se encontró el trigger del menú: "${trigger}"`);
+  }
+
+  /**
+   * Verifica una opción del menú (habilitada/deshabilitada)
+   */
+  private async verifyMenuOption(option: MenuOption): Promise<void> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    const stateText = option.state === 'enabled' ? '(habilitado)' : 
+                      option.state === 'disabled' ? '(deshabilitado)' : '';
+    console.log(`        - "${option.text}" ${stateText}`);
+    
+    // Esperar un momento para asegurar que el menú está renderizado
+    await this.page.waitForTimeout(300);
+    
+    // Primero buscar dentro del menú/popup abierto
+    const menuContainer = this.page.locator('[role="menu"], [role="listbox"], .MuiMenu-paper, .MuiPopover-paper, .MuiMenu-list, .MuiList-root').first();
+    
+    // Debug: ver si el contenedor del menú existe
+    const containerCount = await menuContainer.count();
+    if (containerCount === 0) {
+      console.log(`        ⚠️ No se encontró contenedor de menú visible`);
+    }
+    
+    // Buscar la opción dentro del contenedor del menú
+    const optionLocator = menuContainer.getByRole('menuitem', { name: option.text })
+      .or(menuContainer.locator(`[role="menuitem"]:has-text("${option.text}")`))
+      .or(menuContainer.locator(`li:has-text("${option.text}")`))
+      .or(menuContainer.locator(`[role="option"]:has-text("${option.text}")`))
+      .or(menuContainer.getByText(option.text, { exact: false }));
+    
+    // Si no encuentra en el contenedor, buscar globalmente como fallback
+    const fallbackLocator = this.page.getByRole('menuitem', { name: option.text })
+      .or(this.page.locator(`[role="menuitem"]:has-text("${option.text}")`))
+      .or(this.page.locator(`.MuiMenuItem-root:has-text("${option.text}")`))
+      .or(this.page.locator(`li.MuiButtonBase-root:has-text("${option.text}")`))
+      .or(this.page.getByText(option.text, { exact: true }));
+    
+    let element = optionLocator.first();
+    
+    try {
+      await element.waitFor({ state: 'visible', timeout: 2000 });
+    } catch {
+      // Fallback: buscar globalmente
+      element = fallbackLocator.first();
+      try {
+        await element.waitFor({ state: 'visible', timeout: 2000 });
+      } catch {
+        throw new Error(`Opción de menú no encontrada: "${option.text}"`);
+      }
+    }
+    
+    // Verificar estado si se especificó
+    if (option.state === 'enabled') {
+      const isDisabled = await element.evaluate(el => {
+        const elem = el as HTMLElement;
+        // Verificar en el elemento o en hijos con role="button"
+        const buttonChild = elem.querySelector('[role="button"]') as HTMLElement;
+        const target = buttonChild || elem;
+        
+        return target.hasAttribute('disabled') || 
+               target.getAttribute('aria-disabled') === 'true' ||
+               target.classList.contains('disabled') ||
+               target.classList.contains('Mui-disabled') ||
+               elem.classList.contains('Mui-disabled') ||
+               getComputedStyle(target).pointerEvents === 'none';
+      });
+      
+      if (isDisabled) {
+        throw new Error(`"${option.text}" debería estar habilitado pero está deshabilitado`);
+      }
+      console.log(`        ✅ "${option.text}" está habilitado`);
+      
+    } else if (option.state === 'disabled') {
+      const isDisabled = await element.evaluate(el => {
+        const elem = el as HTMLElement;
+        // Verificar en el elemento o en hijos con role="button"
+        const buttonChild = elem.querySelector('[role="button"]') as HTMLElement;
+        const target = buttonChild || elem;
+        
+        return target.hasAttribute('disabled') || 
+               target.getAttribute('aria-disabled') === 'true' ||
+               target.classList.contains('disabled') ||
+               target.classList.contains('Mui-disabled') ||
+               elem.classList.contains('Mui-disabled') ||
+               getComputedStyle(target).pointerEvents === 'none' ||
+               getComputedStyle(target).opacity < '0.6';
+      });
+      
+      if (!isDisabled) {
+        throw new Error(`"${option.text}" debería estar deshabilitado pero está habilitado`);
+      }
+      console.log(`        ✅ "${option.text}" está deshabilitado`);
+      
+    } else {
+      // state === 'any' o no especificado - solo verificar que existe
+      console.log(`        ✅ "${option.text}" existe`);
+    }
+  }
+
+  /**
+   * Verifica un menú de sidebar (expande si es necesario, verifica submenús)
+   */
+  private async verifySidebar(menuName: string, submenus: MenuOption[]): Promise<void> {
+    if (!this.page) throw new Error('Página no inicializada');
+    
+    console.log(`     📁 Sidebar: "${menuName}"`);
+    
+    // 1. Encontrar el menú de sidebar
+    const sidebarMenu = this.page.locator('nav, .sidebar, [class*="drawer"], [class*="sidebar"]')
+      .getByText(menuName, { exact: true })
+      .first();
+    
+    try {
+      await sidebarMenu.waitFor({ state: 'visible', timeout: 5000 });
+    } catch {
+      throw new Error(`Menú de sidebar no encontrado: "${menuName}"`);
+    }
+    
+    // 2. Verificar si los submenús ya son visibles (menú ya expandido)
+    // Intentamos encontrar el primer submenú para saber si ya está expandido
+    const firstSubmenu = submenus[0];
+    if (firstSubmenu) {
+      const firstSubLocator = this.page.locator('nav, .sidebar, [class*="drawer"]')
+        .getByText(firstSubmenu.text, { exact: true })
+        .first();
+      
+      const isFirstSubmenuVisible = await firstSubLocator.isVisible().catch(() => false);
+      
+      if (isFirstSubmenuVisible) {
+        console.log(`        Menú ya expandido`);
+      } else {
+        // 3. Si no está expandido, hacer click para expandir
+        console.log(`        Expandiendo menú...`);
+        await sidebarMenu.click();
+        await this.page.waitForTimeout(500);
+      }
+    }
+    
+    // 4. Verificar cada submenú
+    for (const submenu of submenus) {
+      const subLocator = this.page.locator('nav, .sidebar, [class*="drawer"]')
+        .getByText(submenu.text, { exact: true })
+        .or(this.page.locator('nav, .sidebar').locator(`a:has-text("${submenu.text}")`));
+      
+      try {
+        await subLocator.first().waitFor({ state: 'visible', timeout: 3000 });
+        console.log(`        ✅ Submenú "${submenu.text}" encontrado`);
+      } catch {
+        throw new Error(`Submenú no encontrado: "${submenu.text}"`);
+      }
     }
   }
 

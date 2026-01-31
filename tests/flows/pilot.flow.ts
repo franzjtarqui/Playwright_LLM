@@ -2,7 +2,7 @@ import { defineFlow } from '../../src/runner/index.js';
 
 export default defineFlow({
   name: 'Flujo piloto',
-  tags: ['operadores','piloto'],
+  tags: ['operadores','pil'],
   
   url: '${TEST_URL}',
   

@@ -70,7 +70,7 @@ const config: AITestConfig = {
     
     /** Generar Playwright Trace (archivo .zip para debug) */
     trace: {
-      enabled: false,
+      enabled: true,
       /** 
        * Cuándo generar trace:
        * - 'always': Siempre

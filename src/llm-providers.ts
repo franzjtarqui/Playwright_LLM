@@ -16,10 +16,36 @@ export interface LLMProvider {
  * Respuesta de análisis de la IA
  */
 export interface AIAction {
-  type: 'fill' | 'click' | 'press' | 'wait' | 'verify';
+  type: 'fill' | 'click' | 'press' | 'wait' | 'verify' | 'verifyAll';
   description: string;
   locator: string;
   value?: string;
+  /** Para verifyAll: lista de verificaciones a realizar */
+  verifications?: VerifyItem[];
+}
+
+/**
+ * Item de verificación para verifyAll
+ */
+export interface VerifyItem {
+  /** Tipo de verificación */
+  type: 'element' | 'menu' | 'sidebar';
+  /** Texto o selector del elemento */
+  target: string;
+  /** Para menús: opciones a verificar dentro */
+  options?: MenuOption[];
+  /** Si debe verificar match exacto */
+  exact?: boolean;
+}
+
+/**
+ * Opción de menú a verificar
+ */
+export interface MenuOption {
+  /** Texto de la opción */
+  text: string;
+  /** Estado esperado: habilitado, deshabilitado, o cualquiera */
+  state?: 'enabled' | 'disabled' | 'any';
 }
 
 export interface AIDecision {
@@ -85,7 +111,7 @@ export class GoogleAIProvider implements LLMProvider {
   async initialize(): Promise<void> {
     const genAI = new GoogleGenerativeAI(this.apiKey);
     // Usar gemini-2.0-flash que soporta visión y texto
-    this.model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+    this.model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   }
 
   async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {

@@ -80,7 +80,7 @@ const DEFAULT_CONFIG: SelectorCacheConfig = {
   cleanupInterval: 60 * 60 * 1000,       // 1 hora
   cacheFilePath: './selector-cache.json',
   appVersion: '1.0.0',
-  similarityThreshold: 0.85,
+  similarityThreshold: 1.0, // 100% - solo coincidencias exactas
   debug: false,
 };
 

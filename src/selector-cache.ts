@@ -2,6 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { globalFileLock } from './utils/locks.js';
 
+import { VerifyItem } from './llm-providers.js';
+
 /**
  * Acción cacheada individual
  */
@@ -14,6 +16,8 @@ export interface CachedAction {
   description: string;
   /** Valor para acciones tipo fill (opcional) */
   value?: string;
+  /** Para verifyAll: lista de verificaciones a realizar */
+  verifications?: VerifyItem[];
 }
 
 /**

@@ -864,10 +864,11 @@ IMPORTANT - Menu targets:
         // Construir AIDecision desde el caché con TODAS las acciones
         const cachedDecision: AIDecision = {
           actions: cached.actions.map(action => ({
-            type: action.actionType as 'fill' | 'click' | 'press' | 'wait' | 'verify',
+            type: action.actionType as 'fill' | 'click' | 'press' | 'wait' | 'verify' | 'verifyAll',
             description: action.description,
             locator: action.selector,
             value: action.value,
+            verifications: action.verifications,  // Recuperar verificaciones para verifyAll
           })),
           reasoning: `[DESDE CACHÉ] ${cached.reasoning}`,
           needsVerification: false,
@@ -927,6 +928,7 @@ IMPORTANT - Menu targets:
           actionType: action.type,
           description: action.description,
           value: action.value,
+          verifications: action.verifications,  // Guardar verificaciones para verifyAll
         }));
         
         this.selectorCache.set(

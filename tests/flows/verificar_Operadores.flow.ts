@@ -1,7 +1,7 @@
 import { defineFlow } from '../../src/runner/index.js';
 
 export default defineFlow({
-  name: 'Flujo piloto',
+  name: 'Verificar pantalla Operadores',
   tags: ['operadores','piloto'],
   
   url: '${TEST_URL}',
@@ -20,14 +20,13 @@ export default defineFlow({
    - tab: "Tradicional"
    - tab: "Eventuales"
    - placeholder: "Buscar por: Nombre, Apellido, Nro. de documento"
-   - columna: "Nombre"
-   - columna: "Apellido"
-   - menú "...":
+   - columnas: "Nro de documento", "Nombre", "Apellido", "Tipo de flota", "Estado de verificación", "Nro de celular", "Orden de carga", "Etiqueta de flota", "Restricción" 
+   - Verificar menú de opciones generales (botón tres puntos horizontales fuera de tabla):
      - opción habilitada: "Descargar"
      - opción habilitada: "Reporte de incidencias"
      - opción habilitada: "Editar columnas"
      - opción deshabilitada: "Limpiar filtros"`,
-  `Verificar menú de registro de la tabla:
+  `Verificar menú de acciones del primer registro (botón tres puntos verticales en tabla):
    - menú primer registro tabla:
      - opción: "Ver detalle"
      - opción: "Editar"

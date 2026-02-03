@@ -717,7 +717,16 @@ Use this when the user wants to verify multiple elements of a screen, including 
     }
   ]
 }
-States: "enabled" = must be clickable, "disabled" = must be grayed out/not clickable, "any" = just check it exists
+
+STATES RULES:
+- "enabled" = must be clickable (use when user says "habilitada", "enabled", "activa")
+- "disabled" = must be grayed out/not clickable (use when user says "deshabilitada", "disabled", "inactiva")
+- "any" = just check it exists, don't verify state (USE THIS when user just says "opción:" without specifying state)
+
+⚠️ IMPORTANT: If the instruction only says "opción: 'text'" WITHOUT "habilitada" or "deshabilitada", use "state": "any"
+   - "opción habilitada: 'Edit'" → { "text": "Edit", "state": "enabled" }
+   - "opción deshabilitada: 'Delete'" → { "text": "Delete", "state": "disabled" }
+   - "opción: 'View'" → { "text": "View", "state": "any" }  ← NO state specified = "any"
 
 LOCATOR RULES:
 ⚠️ CRITICAL RULE - EXACT MATCH:
@@ -778,7 +787,36 @@ Instruction: "Click on menu item with exact text 'Mi flota', then submenu with e
   ],
   "reasoning": "User requested exact text matching, so using 'exact' prefix to ensure precise match",
   "needsVerification": true
-}`;
+}
+
+EXAMPLE - Table row menu verification (when user mentions "tabla", "registro", "fila"):
+Instruction: "Verificar menú primer registro tabla: opción: 'Ver detalle', opción: 'Editar'"
+{
+  "actions": [
+    {
+      "type": "verifyAll",
+      "description": "Verify action menu options for first table record",
+      "locator": "screen",
+      "verifications": [
+        {
+          "type": "menu",
+          "target": "menú primer registro tabla",
+          "options": [
+            { "text": "Ver detalle", "state": "any" },
+            { "text": "Editar", "state": "any" }
+          ]
+        }
+      ]
+    }
+  ],
+  "reasoning": "User wants to verify table row menu options. Since no 'habilitada/deshabilitada' was specified, using state 'any' to just check options exist",
+  "needsVerification": true
+}
+
+IMPORTANT - Menu targets:
+- "menú primer registro tabla" / "menu first row table" → Table row menu (MoreVert in DataGrid row)
+- "..." / "opciones generales" / "menú general" → General menu outside table (MoreHoriz)
+- Include keywords like "tabla", "registro", "fila", "row", "table" to indicate table row menu`;
   }
 
   /**
@@ -1490,46 +1528,88 @@ Instruction: "Click on menu item with exact text 'Mi flota', then submenu with e
 
   /**
    * Encuentra el trigger de un menú (botón "...", icono, etc.)
+   * Distingue entre menús de tabla (dentro de DataGrid) y menús generales (fuera de tabla)
    */
   private async findMenuTrigger(trigger: string): Promise<Locator> {
     if (!this.page) throw new Error('Página no inicializada');
     
     // Detectar si es un menú de tabla (primer registro, primera fila, etc.)
-    const isTableRowMenu = /primer|first|fila|row|registro/i.test(trigger);
+    const isTableRowMenu = /tabla|table|primer|first|fila|row|registro|record|grid|datagrid/i.test(trigger);
+    // Detectar si explícitamente NO es de tabla (general, opciones generales, fuera de tabla)
+    const isGeneralMenu = /general|fuera|outside|opciones generales|horizontal|horiz/i.test(trigger);
     
-    // Intentar diferentes formas de encontrar el trigger
-    const strategies = [
-      // Botón de acciones en DataGrid (primer registro de tabla)
-      ...(isTableRowMenu ? [
-        // MUI DataGrid: celda de acciones con IconButton
-        () => this.page!.locator('[role="row"]').first().locator('[data-field="actions"] button, .MuiDataGrid-cell--withRenderer button.MuiIconButton-root'),
-        // Primer botón MoreVert en una fila de tabla
-        () => this.page!.locator('[role="row"]').first().locator('button').filter({ has: this.page!.locator('svg[data-testid*="MoreVert"]') }),
-        // Primera fila con botón de menú
-        () => this.page!.locator('tr, [role="row"]').first().locator('button.MuiIconButton-root'),
-      ] : []),
+    console.log(`        🔍 Buscando trigger: "${trigger}" (tabla: ${isTableRowMenu}, general: ${isGeneralMenu})`);
+    
+    let strategies: Array<() => Locator> = [];
+    
+    if (isTableRowMenu && !isGeneralMenu) {
+      // MENÚ DE TABLA: Buscar específicamente dentro de las FILAS DE DATOS del DataGrid
+      // IMPORTANTE: Evitar el header (.MuiDataGrid-columnHeaders) y los filtros
+      strategies = [
+        // 1. Botón con aria-haspopup en celda de acciones de la primera fila de datos
+        () => this.page!.locator('.MuiDataGrid-virtualScrollerContent .MuiDataGrid-row').first()
+          .locator('[data-field="actions"] button[aria-haspopup="true"]'),
+        // 2. Botón MoreVert en primera fila de datos (área de scroll, no header)
+        () => this.page!.locator('.MuiDataGrid-virtualScrollerContent .MuiDataGrid-row').first()
+          .locator('button').filter({ has: this.page!.locator('svg[data-testid*="MoreVert"]') }),
+        // 3. Celda de acciones en primera fila de datos
+        () => this.page!.locator('.MuiDataGrid-virtualScrollerContent .MuiDataGrid-row').first()
+          .locator('[data-field="actions"] button'),
+        // 4. Cualquier IconButton en primera fila del área de datos
+        () => this.page!.locator('.MuiDataGrid-virtualScrollerContent .MuiDataGrid-row').first()
+          .locator('button.MuiIconButton-root'),
+        // 5. Fallback: primera fila con role="row" que NO sea header, buscando en data-rowindex="0"
+        () => this.page!.locator('.MuiDataGrid-row[data-rowindex="0"] [data-field="actions"] button'),
+      ];
+    } else {
+      // MENÚ GENERAL: Buscar FUERA del DataGrid
+      strategies = [
+        // Botón MoreHoriz (tres puntos horizontales) FUERA del DataGrid
+        () => this.page!.locator('button:not(.MuiDataGrid-root button)').filter({ 
+          has: this.page!.locator('svg[data-testid*="MoreHoriz"]') 
+        }),
+        // Botón con texto "..." fuera del DataGrid
+        () => this.page!.locator('button:not(.MuiDataGrid-root button):has-text("...")'),
+        // IconButton fuera del DataGrid con icono More
+        () => this.page!.locator('button.MuiIconButton-root:not(.MuiDataGrid-root button)').filter({ 
+          has: this.page!.locator('svg[data-testid*="More"]') 
+        }),
+        // Botón con aria-label de menú/opciones fuera del DataGrid
+        () => this.page!.locator('[aria-label*="more"]:not(.MuiDataGrid-root *), [aria-label*="menu"]:not(.MuiDataGrid-root *), [aria-label*="opciones"]:not(.MuiDataGrid-root *)'),
+      ];
+    }
+    
+    // Estrategias de fallback (comunes)
+    const fallbackStrategies = [
       // Botón con texto exacto
       () => this.page!.getByRole('button', { name: trigger }),
-      // Botón con aria-label (común para iconos de menú)
-      () => this.page!.locator(`[aria-label="${trigger}"], [aria-label*="${trigger}"], [aria-label*="more"], [aria-label*="menu"], [aria-label*="opciones"]`),
-      // Icono de menú MUI (MoreVert, MoreHoriz) - muy común en Material-UI
-      () => this.page!.locator('[data-testid="MoreVertIcon"], [data-testid="MoreHorizIcon"], [data-testid*="MoreVert"]').locator('xpath=ancestor::button[1]'),
-      // Botones con iconos de tres puntos (SVG dentro de botón)
+      // Botón con aria-label
+      () => this.page!.locator(`[aria-label="${trigger}"], [aria-label*="${trigger}"]`),
+      // Icono de menú MUI (MoreVert, MoreHoriz)
+      () => this.page!.locator('[data-testid="MoreVertIcon"], [data-testid="MoreHorizIcon"]').locator('xpath=ancestor::button[1]'),
+      // Cualquier botón con icono More
       () => this.page!.locator('button').filter({ has: this.page!.locator('svg[data-testid*="More"]') }),
-      // Icono de menú (tres puntos como texto)
-      () => this.page!.locator('button:has-text("..."), button:has-text("⋮"), button:has-text("⋯")'),
-      // Botón con clases de menú
-      () => this.page!.locator('[data-testid*="menu"], [class*="menu-trigger"], [class*="MenuButton"], [class*="more-button"]'),
-      // Botón IconButton de MUI (común para acciones de menú)
-      () => this.page!.locator('button.MuiIconButton-root').filter({ has: this.page!.locator('svg') }),
-      // Cualquier elemento clickeable con ese texto
-      () => this.page!.locator(`button, [role="button"]`).filter({ hasText: trigger }),
     ];
     
+    // Primero intentar estrategias específicas
     for (const strategy of strategies) {
       try {
         const locator = strategy().first();
         if (await locator.count() > 0 && await locator.isVisible()) {
+          console.log(`        ✅ Trigger encontrado con estrategia específica`);
+          return locator;
+        }
+      } catch {
+        // Continuar con siguiente estrategia
+      }
+    }
+    
+    // Luego intentar estrategias de fallback
+    for (const strategy of fallbackStrategies) {
+      try {
+        const locator = strategy().first();
+        if (await locator.count() > 0 && await locator.isVisible()) {
+          console.log(`        ✅ Trigger encontrado con fallback`);
           return locator;
         }
       } catch {

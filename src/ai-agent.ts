@@ -961,7 +961,9 @@ IMPORTANT - Menu targets:
     
     // Extraer información del locator que envió la IA
     const nameMatch = description.match(/name[=:]?\s*['"]?([^'">\s]+)/i);
-    const idMatch = description.match(/id[=:]?\s*['"]?([^'">\s]+)/i);
+    // Regex mejorada para IDs: captura todo entre comillas o hasta espacio/fin
+    const idMatch = description.match(/id[=:]?\s*['"]([^'"]+)['"]/i) || 
+                    description.match(/id[=:]?\s*([^\s'"]+)/i);
     const placeholderMatch = description.match(/placeholder[=:]?\s*['"]?([^'"]+)/i);
     const typeMatch = description.match(/type[=:]?\s*['"]?([^'">\s]+)/i);
     const textMatch = description.match(/texto?\s*['"]?([^'"]+)/i) || description.match(/['"]([^'"]+)['"]/);
@@ -1058,8 +1060,13 @@ IMPORTANT - Menu targets:
             console.log(`  ⚠️ ID dinámico detectado (${id}), buscando alternativas...`);
             return null; // Saltar IDs dinámicos
           }
-          const loc = page.locator(`#${id}, [id="${id}"]`).first();
-          if (await loc.count() > 0) return loc;
+          // Usar selector de atributo [id="..."] que no requiere escapar caracteres especiales
+          // El selector #id falla con caracteres como [ ] . que son especiales en CSS
+          const loc = page.locator(`[id="${id}"]`).first();
+          if (await loc.count() > 0) {
+            console.log(`  ✅ Encontrado por ID: ${id}`);
+            return loc;
+          }
         }
         return null;
       },

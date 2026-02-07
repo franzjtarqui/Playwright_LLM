@@ -15,6 +15,7 @@
     "test:login": "tsc && node dist/tests/run.js --tag login",
     "test:operadores": "tsc && node dist/tests/run.js --tag operadores",
     "test:piloto": "tsc && node dist/tests/run.js --tag piloto",
+    "test:piloto_ita": "tsc && node dist/tests/run.js --tag Piloto_itacamba",
     "test:e2e": "tsc && node dist/tests/run.js --tag e2e",
     "test:exclude-slow": "tsc && node dist/tests/run.js --exclude slow",
     

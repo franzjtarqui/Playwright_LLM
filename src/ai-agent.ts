@@ -127,6 +127,14 @@ export interface ExecuteFlowParams {
 export type AnalysisMode = 'screenshot' | 'html' | 'hybrid';
 
 /**
+ * Nivel de espera/estabilización de página
+ * - 'full': Pipeline completo (post-navegación, primera carga)
+ * - 'light': Loaders + DOM stable (post-click sin navegación, cache hit)
+ * - 'minimal': Solo DOM stable (post-fill, post-press)
+ */
+export type WaitLevel = 'full' | 'light' | 'minimal';
+
+/**
  * Elemento interactivo extraído del DOM
  */
 export interface InteractiveElement {
@@ -171,6 +179,12 @@ export class PlaywrightAIAgent {
    * Cambia esto para optimizar costos vs precisión
    */
   public analysisMode: AnalysisMode = 'html'; // Por defecto usa HTML (más barato)
+
+  /**
+   * System prompt cacheado (estático, ~2.5KB) para reducir tokens
+   * Se genera una sola vez y se reutiliza en todas las llamadas
+   */
+  private systemPrompt: string | null = null;
 
   /**
    * Constructor del agente
@@ -225,7 +239,7 @@ export class PlaywrightAIAgent {
    * @param options - Opciones de inicialización (headless, slowMo)
    */
   async initialize(options: { headless?: boolean; slowMo?: number } = {}): Promise<void> {
-    const { headless = false, slowMo = 500 } = options;
+    const { headless = false, slowMo = 100 } = options;
     
     // Inicializar proveedor de LLM (auto-detecta según .env)
     this.llmProvider = createLLMProvider();
@@ -388,60 +402,68 @@ export class PlaywrightAIAgent {
    * Espera a que la página esté completamente cargada y estable
    * Incluye: network idle, loaders, aria-busy, y estabilidad del Accessibility Tree
    */
-  private async waitForPageStable(): Promise<void> {
+  /**
+   * Espera a que la página esté estable con diferentes niveles de verificación
+   * @param level Nivel de espera: 'full', 'light', o 'minimal'
+   */
+  private async waitForPageStable(level: WaitLevel = 'full'): Promise<void> {
     if (!this.page) return;
     
-    console.log('   ⏳ Esperando a que la página esté estable...');
+    console.log(`   ⏳ Esperando estabilización (nivel: ${level})...`);
     
-    // 1. Esperar a que no haya peticiones de red pendientes
-    try {
-      await this.page.waitForLoadState('networkidle', { timeout: 10000 });
-    } catch {
-      console.log('   ⚠️ Timeout en networkidle, continuando...');
+    if (level === 'minimal') {
+      // Solo estabilidad del DOM para operaciones simples (fill, press)
+      await this.waitForDOMStable(200, 2000);
+      console.log('   ✅ Página estable (minimal)');
+      return;
     }
     
-    // 2. Esperar a que el DOM esté completamente cargado
-    try {
-      await this.page.waitForLoadState('domcontentloaded', { timeout: 5000 });
-    } catch {
-      // Ignorar si ya pasó
+    if (level === 'light') {
+      // Loaders + DOM stable para clicks sin navegación o cache hits
+      console.log('   🔄 Verificando loaders...');
+      await Promise.all([
+        this.waitForLoadersToDisappear(10000),
+        this.waitForAriaBusyFalse(5000)
+      ]);
+      await this.waitForDOMStable(300, 3000);
+      console.log('   ✅ Página estable (light)');
+      return;
     }
     
-    // 3. Esperar a que document.readyState === 'complete'
-    try {
-      await this.page.waitForFunction(() => {
-        return document.readyState === 'complete';
-      }, { timeout: 5000 });
-    } catch {
-      // Ignorar si ya está listo
-    }
+    // level === 'full': Pipeline completo para navegaciones y primera carga
+    // Grupo 1: Esperas de carga básicas (en paralelo)
+    await Promise.all([
+      this.page.waitForLoadState('networkidle', { timeout: 10000 }).catch(() => {
+        console.log('   ⚠️ Timeout en networkidle, continuando...');
+      }),
+      this.page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {}),
+      this.page.waitForFunction(() => document.readyState === 'complete', { timeout: 5000 }).catch(() => {})
+    ]);
     
-    // 4. Esperar a que desaparezcan los loaders/spinners
+    // Grupo 2: Esperas de UI (en paralelo)
     console.log('   🔄 Verificando loaders...');
-    await this.waitForLoadersToDisappear(15000);
+    await Promise.all([
+      this.waitForLoadersToDisappear(15000),
+      this.waitForAriaBusyFalse(5000)
+    ]);
     
-    // 5. Esperar a que aria-busy sea false
-    await this.waitForAriaBusyFalse(5000);
-    
-    // 6. Esperar estabilidad del DOM
+    // Grupo 3: Estabilidad final del DOM
     console.log('   🌳 Verificando estabilidad del DOM...');
-    await this.waitForDOMStable(500, 5000);
+    await this.waitForDOMStable(300, 3000);
     
-    // 7. Pequeña espera adicional para renderizado final
-    await this.page.waitForTimeout(300);
-    
-    console.log('   ✅ Página estable');
+    console.log('   ✅ Página estable (full)');
   }
 
   /**
    * Extrae elementos interactivos usando el Accessibility Tree
    * Esto es más preciso y eficiente que escanear el DOM
+   * @param waitLevel Nivel de espera antes de extraer
    */
-  private async extractInteractiveElements(): Promise<InteractiveElement[]> {
+  private async extractInteractiveElements(waitLevel: WaitLevel = 'full'): Promise<InteractiveElement[]> {
     if (!this.page) throw new Error('Página no inicializada');
     
     // Esperar a que la página esté estable (incluyendo loaders)
-    await this.waitForPageStable();
+    await this.waitForPageStable(waitLevel);
     
     console.log('   🌳 Extrayendo elementos interactivos con información de accesibilidad...');
     
@@ -624,41 +646,23 @@ export class PlaywrightAIAgent {
   private async getPageContext(): Promise<PageContext> {
     if (!this.page) throw new Error('Página no inicializada');
     
-    const html = await this.page.content();
     const url = this.page.url();
     const title = await this.page.title();
+    const htmlLength = await this.page.evaluate(() => document.documentElement.outerHTML.length);
     
     return {
       url,
       title,
-      htmlLength: html.length
+      htmlLength
     };
   }
 
   /**
-   * Genera el prompt para el LLM - adaptado según el modo de análisis
+   * Genera el system prompt estático (cacheable) - llamado una sola vez
    * NOTA: Prompt en inglés para mejor comprensión de la IA
    */
-  private generatePrompt(instruction: string, context: PageContext, elementsHtml?: string): string {
-    const basePrompt = `You are an expert web automation agent. Analyze the page information and determine what Playwright actions are needed to fulfill this instruction:
-
-USER INSTRUCTION: "${instruction}"
-
-CONTEXT:
-- Current URL: ${context.url}
-- Page Title: ${context.title}`;
-
-    const elementsSection = elementsHtml ? `
-INTERACTIVE ELEMENTS AVAILABLE ON THE PAGE:
-${elementsHtml}
-` : '';
-
-    const modeHint = this.analysisMode === 'html' 
-      ? '\nNOTE: Use IDs, names, placeholders or visible text from the listed elements to identify them precisely.'
-      : '\nNOTE: Describe elements by their visual appearance.';
-
-    return `${basePrompt}
-${elementsSection}${modeHint}
+  private generateSystemPrompt(): string {
+    return `You are an expert web automation agent. Analyze the page information and determine what Playwright actions are needed to fulfill user instructions.
 
 CRITICAL RULES:
 1. You MUST generate ALL actions mentioned in the instruction, even if elements are not visible in the list
@@ -820,6 +824,31 @@ IMPORTANT - Menu targets:
   }
 
   /**
+   * Genera el user prompt dinámico (variable por cada llamada)
+   * @param instruction Instrucción del usuario
+   * @param context Contexto de la página actual
+   * @param elementsHtml HTML de elementos interactivos (opcional)
+   */
+  private generateUserPrompt(instruction: string, context: PageContext, elementsHtml?: string): string {
+    const contextSection = `USER INSTRUCTION: "${instruction}"
+
+CONTEXT:
+- Current URL: ${context.url}
+- Page Title: ${context.title}`;
+
+    const elementsSection = elementsHtml ? `
+
+INTERACTIVE ELEMENTS AVAILABLE ON THE PAGE:
+${elementsHtml}` : '';
+
+    const modeHint = this.analysisMode === 'html' 
+      ? '\n\nNOTE: Use IDs, names, placeholders or visible text from the listed elements to identify them precisely.'
+      : '\n\nNOTE: Describe elements by their visual appearance.';
+
+    return `${contextSection}${elementsSection}${modeHint}`;
+  }
+
+  /**
    * Consulta al LLM para analizar la página y decidir acciones
    * Soporta 3 modos: 'screenshot', 'html', 'hybrid'
    * 
@@ -834,29 +863,18 @@ IMPORTANT - Menu targets:
     if (!this.llmProvider) throw new Error('Proveedor LLM no inicializado');
     if (!this.page) throw new Error('Página no inicializada');
     
-    // 📋 PASO 0: Esperar a que la página esté estable ANTES de verificar caché
-    // Esto asegura que la URL sea la correcta después de navegaciones
-    let elementsHtml: string | undefined;
-    if (this.analysisMode === 'html' || this.analysisMode === 'hybrid') {
-      console.log('📋 Extrayendo elementos interactivos del DOM...');
-      const elements = await this.extractInteractiveElements();
-      elementsHtml = this.formatElementsForAI(elements);
-      console.log(`   Encontrados: ${elements.length} elementos`);
-    } else {
-      // Incluso en modo screenshot, esperar estabilización básica
-      await this.page.waitForLoadState('domcontentloaded', { timeout: 10000 }).catch(() => {});
-    }
-    
-    // Capturar URL DESPUÉS de que la página esté estable
+    // 📋 PASO 0: Capturar URL con estabilización mínima (sin extraer elementos aún)
+    // Esperar solo que el DOM básico esté listo para capturar la URL correcta
+    await this.page.waitForLoadState('domcontentloaded', { timeout: 5000 }).catch(() => {});
     const currentUrl = this.page.url();
-    console.log(`🔗 URL estable: ${currentUrl}`);
+    console.log(`🔗 URL actual: ${currentUrl}`);
     
-    // 🔍 PASO 1: Buscar en caché (si no se está saltando)
+    // 🔍 PASO 1: Buscar en caché PRIMERO (antes de extraer elementos)
     if (this.useSelectorCache && !skipCache) {
       const cached = this.selectorCache.find(currentUrl, instruction);
       
       if (cached && cached.actions.length > 0) {
-        console.log(`💾 ¡CACHE HIT! Usando ${cached.actions.length} acciones guardadas (0 tokens)`);
+        console.log(`💾 ¡CACHE HIT! Usando ${cached.actions.length} acciones guardadas (0 tokens, sin extracción de elementos)`);
         cached.actions.forEach((action, i) => {
           console.log(`   ${i + 1}. [${action.actionType}] ${action.selector}`);
         });
@@ -868,34 +886,49 @@ IMPORTANT - Menu targets:
             description: action.description,
             locator: action.selector,
             value: action.value,
-            verifications: action.verifications,  // Recuperar verificaciones para verifyAll
+            verifications: action.verifications,
           })),
           reasoning: `[DESDE CACHÉ] ${cached.reasoning}`,
           needsVerification: false,
-          fromCache: true,  // Marcar que viene del caché
+          fromCache: true,
         };
         
         return cachedDecision;
       }
     }
     
-    // 🧠 PASO 2: Cache MISS - Consultar al LLM
+    // 🧠 PASO 2: Cache MISS - Ahora SÍ extraer elementos y consultar al LLM
     if (skipCache) {
       console.log('🔄 Cache invalidado - Consultando al LLM para obtener selectores actualizados...');
     } else {
-      console.log('🧠 Cache MISS - Consultando al LLM...');
+      console.log('🧠 Cache MISS - Extrayendo elementos y consultando al LLM...');
+    }
+    
+    // Extraer elementos con espera completa (solo cuando no hay cache)
+    let elementsHtml: string | undefined;
+    if (this.analysisMode === 'html' || this.analysisMode === 'hybrid') {
+      console.log('📋 Extrayendo elementos interactivos del DOM...');
+      const elements = await this.extractInteractiveElements('full');
+      elementsHtml = this.formatElementsForAI(elements);
+      console.log(`   Encontrados: ${elements.length} elementos`);
     }
     
     const context = await this.getPageContext();
     let responseText: string;
     
-    const prompt = this.generatePrompt(instruction, context, elementsHtml);
+    // Generar system prompt si no está cacheado
+    if (!this.systemPrompt) {
+      this.systemPrompt = this.generateSystemPrompt();
+    }
+    
+    // Generar user prompt dinámico
+    const userPrompt = this.generateUserPrompt(instruction, context, elementsHtml);
     
     // Decidir qué enviar según el modo
     if (this.analysisMode === 'html') {
       // Solo texto, sin imagen (más barato)
       console.log('💰 Modo HTML: enviando solo texto (ahorra tokens)');
-      responseText = await this.llmProvider.analyzeImage('', prompt);
+      responseText = await this.llmProvider.analyzeImage('', userPrompt, this.systemPrompt);
     } else {
       // Con imagen (screenshot o hybrid)
       if (!screenshot) {
@@ -904,7 +937,7 @@ IMPORTANT - Menu targets:
       console.log(this.analysisMode === 'hybrid' 
         ? '🔄 Modo híbrido: enviando screenshot + HTML' 
         : '📸 Modo screenshot: enviando imagen');
-      responseText = await this.llmProvider.analyzeImage(screenshot, prompt);
+      responseText = await this.llmProvider.analyzeImage(screenshot, userPrompt, this.systemPrompt);
     }
     
     console.log(`\n🤖 Respuesta de ${this.llmProvider.name}:`);
@@ -1200,7 +1233,7 @@ IMPORTANT - Menu targets:
 
     // Intentar encontrar el elemento con reintentos
     const maxRetries = 2;
-    const retryDelay = 2000;
+    const retryDelay = 1000;
     
     for (let attempt = 1; attempt <= maxRetries; attempt++) {
       for (const strategy of strategies) {
@@ -1259,7 +1292,7 @@ IMPORTANT - Menu targets:
           const element = await this.findElementByDescription(action.locator);
           await element.fill(action.value || '');
           console.log(`   ✅ Llenado con: "${action.value}"`);
-          await this.page.waitForTimeout(300);
+          await this.page.waitForTimeout(100);
           break;
         }
 
@@ -1273,7 +1306,7 @@ IMPORTANT - Menu targets:
           console.log(`   ✅ Click realizado`);
           
           // Esperar un poco y verificar si hubo navegación
-          await this.page.waitForTimeout(500);
+          await this.page.waitForTimeout(100);
           
           // Si la URL cambió, esperar a que la nueva página cargue
           const urlAfter = this.page.url();
@@ -1292,7 +1325,7 @@ IMPORTANT - Menu targets:
         case 'press': {
           await this.page.keyboard.press(action.value || 'Enter');
           console.log(`   ✅ Tecla presionada: ${action.value}`);
-          await this.page.waitForTimeout(300);
+          await this.page.waitForTimeout(100);
           break;
         }
 
@@ -1804,7 +1837,6 @@ IMPORTANT - Menu targets:
       // 1. Navegar a la página
       console.log('🌐 Navegando a la página...');
       await this.page.goto(url, { waitUntil: 'networkidle' });
-      await this.page.waitForTimeout(1000);
 
       // 2. Analizar con IA (el método decide si usar screenshot o HTML según el modo)
       console.log('🧠 Analizando con IA...');
@@ -1851,9 +1883,6 @@ IMPORTANT - Menu targets:
       if (this.useSelectorCache) {
         this.selectorCache.markSuccess(executionUrl, instruction);
       }
-
-      // 5. Captura final (opcional, para debug)
-      await this.page.waitForTimeout(1000);
 
       console.log('\n✅ Ejecución completada!');
       console.log('='.repeat(80) + '\n');
@@ -1954,7 +1983,6 @@ IMPORTANT - Menu targets:
     // Navegar a la URL inicial
     console.log('🌐 Navegando a la URL inicial...');
     await this.page.goto(url, { waitUntil: 'networkidle' });
-    await this.page.waitForTimeout(1000);
 
     for (let i = 0; i < steps.length; i++) {
       const stepNumber = i + 1;

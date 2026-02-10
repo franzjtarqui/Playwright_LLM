@@ -30,7 +30,7 @@ const config: AITestConfig = {
     headless: false,
     
     /** Ralentizar acciones en ms (útil para debugging) */
-    slowMo: 500,
+    slowMo: 100,
     
     /** Timeout para navegación en ms */
     navigationTimeout: 30000,
@@ -169,7 +169,7 @@ const config: AITestConfig = {
     failFast: false,
     
     /** Delay entre pasos en ms */
-    delayBetweenSteps: 2000,
+    delayBetweenSteps: 300,
     
     /** Reintentos por test fallido (0 = sin reintentos) */
     retries: 0,

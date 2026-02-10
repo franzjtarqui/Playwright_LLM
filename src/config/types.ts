@@ -114,7 +114,7 @@ export const defaultConfig: AITestConfig = {
   
   browser: {
     headless: false,
-    slowMo: 500,
+    slowMo: 100,
     navigationTimeout: 30000,
     actionTimeout: 10000,
     viewport: { width: 1280, height: 720 },
@@ -155,7 +155,7 @@ export const defaultConfig: AITestConfig = {
   execution: {
     stopOnError: true,
     failFast: false,
-    delayBetweenSteps: 2000,
+    delayBetweenSteps: 300,
     retries: 0,
     flowTimeout: 120000,
     parallel: false,

@@ -9,7 +9,7 @@ import 'dotenv/config';
 export interface LLMProvider {
   name: string;
   initialize(): Promise<void>;
-  analyzeImage(screenshotBase64: string, prompt: string): Promise<string>;
+  analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string>;
 }
 
 /**
@@ -69,25 +69,28 @@ export class AnthropicProvider implements LLMProvider {
     this.client = new Anthropic({ apiKey: this.apiKey });
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.client) throw new Error('Cliente no inicializado');
     
     const response = await this.client.messages.create({
       model: 'claude-3-5-sonnet-20241022',
       max_tokens: 1024,
+      system: systemPrompt || undefined,
       messages: [{
         role: 'user',
-        content: [
-          {
-            type: 'image',
-            source: {
-              type: 'base64',
-              media_type: 'image/png',
-              data: screenshotBase64
-            }
-          },
-          { type: 'text', text: prompt }
-        ]
+        content: screenshotBase64 
+          ? [
+              {
+                type: 'image',
+                source: {
+                  type: 'base64',
+                  media_type: 'image/png',
+                  data: screenshotBase64
+                }
+              },
+              { type: 'text', text: prompt }
+            ]
+          : prompt
       }]
     });
     
@@ -105,21 +108,30 @@ export class AnthropicProvider implements LLMProvider {
 export class GoogleAIProvider implements LLMProvider {
   name = 'Google Gemini';
   private model: GenerativeModel | null = null;
+  private genAI: GoogleGenerativeAI | null = null;
   
   constructor(private apiKey: string) {}
 
   async initialize(): Promise<void> {
-    const genAI = new GoogleGenerativeAI(this.apiKey);
-    // Usar gemini-2.0-flash que soporta visión y texto
-    this.model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    this.genAI = new GoogleGenerativeAI(this.apiKey);
+    // Inicializar el modelo básico, luego podremos crear versiones con systemInstruction
+    this.model = this.genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
-    if (!this.model) throw new Error('Modelo no inicializado');
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
+    if (!this.genAI) throw new Error('Modelo no inicializado');
+    
+    // Si hay systemPrompt, crear un modelo con systemInstruction (cacheable)
+    const modelToUse = systemPrompt
+      ? this.genAI.getGenerativeModel({ 
+          model: 'gemini-2.5-flash',
+          systemInstruction: systemPrompt
+        })
+      : this.model!;
     
     // Si no hay imagen, enviar solo texto (modo HTML - más barato)
     if (!screenshotBase64) {
-      const result = await this.model.generateContent(prompt);
+      const result = await modelToUse.generateContent(prompt);
       const response = await result.response;
       return response.text();
     }
@@ -132,7 +144,7 @@ export class GoogleAIProvider implements LLMProvider {
       }
     };
 
-    const result = await this.model.generateContent([prompt, imagePart]);
+    const result = await modelToUse.generateContent([prompt, imagePart]);
     const response = await result.response;
     return response.text();
   }
@@ -151,34 +163,44 @@ export class OpenAIProvider implements LLMProvider {
     this.client = new OpenAI({ apiKey: this.apiKey });
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.client) throw new Error('Cliente no inicializado');
+    
+    // Construir mensajes con system prompt opcional
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
     
     // Si no hay imagen, enviar solo texto
     if (!screenshotBase64) {
+      messages.push({ role: 'user', content: prompt });
       const response = await this.client.chat.completions.create({
         model: 'gpt-4o',
         max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }]
+        messages
       });
       return response.choices[0].message.content || '';
     }
     
+    // Con imagen
+    messages.push({
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/png;base64,${screenshotBase64}`
+          }
+        },
+        { type: 'text', text: prompt }
+      ]
+    });
+    
     const response = await this.client.chat.completions.create({
       model: 'gpt-4o',
       max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:image/png;base64,${screenshotBase64}`
-            }
-          },
-          { type: 'text', text: prompt }
-        ]
-      }]
+      messages
     });
     
     return response.choices[0].message.content || '';
@@ -201,34 +223,44 @@ export class DeepSeekProvider implements LLMProvider {
     });
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.client) throw new Error('Cliente no inicializado');
+    
+    // Construir mensajes con system prompt opcional
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
     
     // DeepSeek funciona mejor con solo texto
     if (!screenshotBase64) {
+      messages.push({ role: 'user', content: prompt });
       const response = await this.client.chat.completions.create({
         model: 'deepseek-chat',
         max_tokens: 1024,
-        messages: [{ role: 'user', content: prompt }]
+        messages
       });
       return response.choices[0].message.content || '';
     }
     
+    // Con imagen
+    messages.push({
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/png;base64,${screenshotBase64}`
+          }
+        },
+        { type: 'text', text: prompt }
+      ]
+    });
+    
     const response = await this.client.chat.completions.create({
       model: 'deepseek-chat',
       max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:image/png;base64,${screenshotBase64}`
-            }
-          },
-          { type: 'text', text: prompt }
-        ]
-      }]
+      messages
     });
     
     return response.choices[0].message.content || '';
@@ -260,13 +292,16 @@ export class OllamaProvider implements LLMProvider {
     }
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
+    // Ollama: agregar systemPrompt como prefijo en el prompt si está presente
+    const fullPrompt = systemPrompt ? `${systemPrompt}\n\n${prompt}` : prompt;
+    
     const response = await fetch(`${this.baseUrl}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: this.model,
-        prompt: prompt,
+        prompt: fullPrompt,
         images: [screenshotBase64],
         stream: false
       })
@@ -302,24 +337,32 @@ export class AzureOpenAIProvider implements LLMProvider {
     });
   }
 
-  async analyzeImage(screenshotBase64: string, prompt: string): Promise<string> {
+  async analyzeImage(screenshotBase64: string, prompt: string, systemPrompt?: string): Promise<string> {
     if (!this.client) throw new Error('Cliente no inicializado');
+    
+    // Construir mensajes con system prompt opcional
+    const messages: any[] = [];
+    if (systemPrompt) {
+      messages.push({ role: 'system', content: systemPrompt });
+    }
+    
+    messages.push({
+      role: 'user',
+      content: [
+        {
+          type: 'image_url',
+          image_url: {
+            url: `data:image/png;base64,${screenshotBase64}`
+          }
+        },
+        { type: 'text', text: prompt }
+      ]
+    });
     
     const response = await this.client.chat.completions.create({
       model: this.deploymentName,
       max_tokens: 1024,
-      messages: [{
-        role: 'user',
-        content: [
-          {
-            type: 'image_url',
-            image_url: {
-              url: `data:image/png;base64,${screenshotBase64}`
-            }
-          },
-          { type: 'text', text: prompt }
-        ]
-      }]
+      messages
     });
     
     return response.choices[0].message.content || '';
